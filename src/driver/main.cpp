@@ -1,5 +1,7 @@
 #include "ast/ast_printer.hpp"
 #include "common/diagnostic.hpp"
+#include "ir/ir_gen.hpp"
+#include "ir/ir_printer.hpp"
 #include "lexer/lexer.hpp"
 #include "parser/parser.hpp"
 #include "sema/checker.hpp"
@@ -23,10 +25,11 @@ void print_usage(std::string_view program) {
     fmt::print("  --dump-tokens   Dump lexer tokens and exit\n");
     fmt::print("  --dump-ast      Dump parsed AST and exit\n");
     fmt::print("  --check         Run semantic analysis and exit\n");
+    fmt::print("  --dump-ir       Dump IR and exit\n");
 }
 
 void print_version() {
-    fmt::print("golangc 0.3.0\n");
+    fmt::print("golangc 0.4.0\n");
     fmt::print("Go compiler implemented in C++\n");
 }
 
@@ -52,6 +55,7 @@ int main(int argc, char* argv[]) {
     bool dump_tokens = false;
     bool dump_ast = false;
     bool check_only = false;
+    bool dump_ir = false;
     std::string source_file;
 
     for (int i = 1; i < argc; ++i) {
@@ -68,6 +72,8 @@ int main(int argc, char* argv[]) {
             dump_ast = true;
         } else if (arg == "--check") {
             check_only = true;
+        } else if (arg == "--dump-ir") {
+            dump_ir = true;
         } else if (arg[0] == '-') {
             fmt::print(stderr, "error: unknown option '{}'\n", arg);
             return 1;
@@ -119,6 +125,19 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         fmt::print("type checking succeeded\n");
+        return 0;
+    }
+
+    if (dump_ir) {
+        golangc::sema::Checker checker(diag);
+        if (!checker.check(parser.file())) {
+            fmt::print(stderr, "type checking failed with {} error(s)\n", diag.error_count());
+            return 1;
+        }
+        golangc::ir::IRGenerator gen(checker);
+        auto module = gen.generate(parser.file());
+        golangc::ir::IRPrinter printer;
+        fmt::print("{}", printer.print(*module));
         return 0;
     }
 

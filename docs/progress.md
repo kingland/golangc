@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 4 (Semantic Analysis) - Complete
-## Current Milestone: Phase 4 complete - full type checker with 110 tests passing
-## Completion Estimate: Phase 4 ~100%
+## Current Phase: 5 (Intermediate Representation) - Complete
+## Current Milestone: Phase 5 complete - SSA-style IR generation with 71 tests passing
+## Completion Estimate: Phase 5 ~100%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -13,7 +13,7 @@
 | AST | ✅ Complete | - | Full node hierarchy (16 expr, 21 stmt, 7 decl, 13 type kinds) |
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 5 sample programs parse |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction |
-| IR | ⬜ Not Started | 0 | |
+| IR | ✅ Complete | 71 | SSA-style IR with alloca-based locals, all 5 samples generate IR |
 | CodeGen | ⬜ Not Started | 0 | |
 | Runtime | ⬜ Not Started | 0 | |
 | Linker | ⬜ Not Started | 0 | |
@@ -276,9 +276,88 @@
 - Type checking, name resolution, and Go-specific validations all working
 - Error diagnostics include source location and descriptive messages
 
+### Session 5 - Phase 5: Intermediate Representation
+#### Completed
+- **IR Core Data Structures** (`src/ir/ir.hpp`, `src/ir/ir.cpp`):
+  - IRTypeKind: Void, I1, I8, I16, I32, I64, F32, F64, Ptr, Struct, Array, Func
+  - ~60 Opcode values: constants, arithmetic (int+float), bitwise, comparison, memory
+    (alloca/load/store/getptr), conversions, aggregates, control flow (br/condbr/ret/switch/phi),
+    calls, Go-specific (GoSpawn, DeferCall, ChanMake/Send/Recv, SliceMake/Len/Cap/Index,
+    MapMake/Get/Set, StringLen/Index/Concat, InterfaceMake/Data/Type, Println, Panic, Recover)
+  - Value base class (id, type, name), Instruction (extends Value with opcode, operands, targets),
+    BasicBlock (label, instructions, predecessors/successors), Function (name, params, blocks,
+    return type), Module (package name, functions, globals), GlobalVariable
+
+- **IR Type Mapping** (`src/ir/ir_type_map.hpp`, `src/ir/ir_type_map.cpp`):
+  - Singleton cached primitives: void, i1, i8, i16, i32, i64, f32, f64, ptr
+  - Composite layouts: string→{ptr,i64}, slice→{ptr,i64,i64}, interface→{ptr,ptr}
+  - Caching via unordered_map to avoid duplicate types
+  - Maps all Go types: bool→I1, int/int64→I64, float32→F32, string→struct, pointer→ptr,
+    chan→ptr, map→ptr, named→underlying, struct→struct of mapped fields
+
+- **IR Builder** (`src/ir/ir_builder.hpp`, `src/ir/ir_builder.cpp`):
+  - Fluent API for constructing IR instructions
+  - Factory methods for every opcode category
+  - CFG edge maintenance on Br/CondBr
+  - Value ID management
+
+- **IR Generator** (`src/ir/ir_gen.hpp`, `src/ir/ir_gen.cpp`, `ir_gen_decl.cpp`,
+  `ir_gen_expr.cpp`, `ir_gen_stmt.cpp`):
+  - Alloca-based SSA construction (no phi nodes needed during initial construction)
+  - Two-pass function generation (register all functions, then generate bodies)
+  - Method naming: "TypeName.MethodName", receiver as first parameter
+  - Expression codegen: ident (load from alloca), basic_lit, binary (int/float dispatch),
+    unary, call (with builtin detection fallback), selector (struct field GEP),
+    index, composite_lit, star, paren, type_assert, func_lit
+  - Short-circuit evaluation for && and ||
+  - Builtin calls: println, len, cap, make, new, append, panic, recover
+  - Statement codegen: block, assign (with compound +=/-= etc.), short_var_decl, return,
+    if/else, for (with loop context for break/continue), range (simplified iterator),
+    switch (chain of condbr), inc_dec, send, go, defer, branch
+  - Declaration codegen: func_decl, global_var, local_var_spec
+  - Uses `Checker::decl_symbol()` for IdentExpr* → Symbol* resolution (VarSpec names,
+    function params, receiver params — these are standalone IdentExpr*, not Expr* unions)
+
+- **IR Printer** (`src/ir/ir_printer.hpp`, `src/ir/ir_printer.cpp`):
+  - Human-readable text output (LLVM IR style)
+  - Module header, function signatures with params and return types
+  - Block labels, instruction opcodes with type annotations
+
+- **Checker Enhancement**:
+  - Added `decl_sym_map_` (IdentExpr* → Symbol*) for declaration names not in expr_map
+  - `decl_symbol()` public method for IR generator access
+  - Records: function names, param names, receiver names, var spec names, const names, type names
+
+- **Build system & Driver**:
+  - `golangc_ir` library (8 source files), linked to sema/ast/common
+  - `test_ir` executable with test_ir.cpp and test_ir_gen.cpp
+  - `--dump-ir` flag, version bumped to 0.4.0
+
+- **71 IR tests** (34 unit + 37 integration):
+  - Unit tests: IR types, opcodes, basic blocks, functions, modules, type mapping, builder, printer
+  - Integration: EmptyMain, HelloWorld, IntConstant, IntArithmetic, Comparison, IfStatement,
+    IfElse, ForLoop, InfiniteFor, Fibonacci, MultipleParams, MultipleVarDecl, Assignment,
+    IncDec, StringLiteral, BoolExpressions, StructLiteral, StructMethod, InterfaceCall,
+    GoroutineAndChannel, all 5 sample programs, SwitchStatement, BreakContinue, VarDeclaration,
+    DeferStatement, ReturnVoid, CompoundAssignment, MultipleFunctions, ModuleHasCorrectName,
+    FunctionHasEntryBlock, AllBlocksTerminated, UnaryMinus, LenArray
+
+- **All 5 sample programs generate IR via `--dump-ir`**:
+  - hello.go: println with string constant
+  - fibonacci.go: params, recursion, if/else, arithmetic
+  - structs.go: struct params, field access, method calls
+  - interfaces.go: interface params, method dispatch
+  - goroutines.go: channel make/send/recv, goroutine spawn
+
+#### Current State
+- IR generation is feature-complete for all core Go constructs
+- All 387 total tests pass (30 common + 89 lexer + 87 parser + 110 sema + 71 IR)
+- SSA-style IR with alloca-based locals, ready for mem2reg optimization
+- Error-free IR generation for all 5 sample programs
+
 #### Next Steps
-- **Phase 5**: Implement Intermediate Representation (SSA-based IR)
-  - Basic blocks with phi nodes
-  - Go-specific constructs (defer, goroutines, channels)
-  - Closure representation
-  - IR generation from checked AST
+- **Phase 6**: Code Generation (x86-64)
+  - Instruction selection from IR
+  - Register allocation
+  - Stack frame layout
+  - PE format output

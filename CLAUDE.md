@@ -177,6 +177,7 @@ Minimal Go runtime in C++/assembly:
 - Interface type assertions
 - Panic/recover mechanism
 - Map implementation
+- Add new package call c/c++ library
 
 ### Phase 8: PE Linker
 - Generate valid Windows PE executables

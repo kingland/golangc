@@ -39,6 +39,9 @@ public:
     /// Get the package scope (valid after check).
     [[nodiscard]] Scope* package_scope() const { return package_scope_; }
 
+    /// Get the symbol declared for an IdentExpr* in a var/const spec.
+    [[nodiscard]] Symbol* decl_symbol(const ast::IdentExpr* ident) const;
+
 private:
     DiagnosticEngine& diag_;
     ArenaAllocator arena_;
@@ -55,6 +58,9 @@ private:
     // Expression type map
     using ExprMap = std::unordered_map<const ast::Expr*, ExprInfo>;
     ExprMap expr_map_;
+
+    // Declaration symbol map (for IdentExpr* in var/const specs)
+    std::unordered_map<const ast::IdentExpr*, Symbol*> decl_sym_map_;
 
     // Type cache for composite types to avoid duplicates
     std::vector<Type*> type_cache_;

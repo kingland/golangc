@@ -36,6 +36,14 @@ const ExprInfo* Checker::expr_info(const ast::Expr* expr) const {
     return nullptr;
 }
 
+Symbol* Checker::decl_symbol(const ast::IdentExpr* ident) const {
+    auto it = decl_sym_map_.find(ident);
+    if (it != decl_sym_map_.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
 // ============================================================================
 // Scope helpers
 // ============================================================================

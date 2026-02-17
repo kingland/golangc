@@ -18,8 +18,9 @@ void Checker::collect_top_level_decls(ast::File* file) {
                 auto& fd = decl->func;
                 if (fd.name && !fd.recv) {
                     // Regular function (not method)
-                    (void)declare(SymbolKind::Func, fd.name->name, nullptr,
-                                  fd.name->loc, decl);
+                    auto* fsym = declare(SymbolKind::Func, fd.name->name, nullptr,
+                                         fd.name->loc, decl);
+                    if (fsym) decl_sym_map_[fd.name] = fsym;
                 }
                 break;
             }
@@ -36,8 +37,9 @@ void Checker::collect_top_level_decls(ast::File* file) {
                     t->named = named;
                     type_cache_.push_back(t);
 
-                    (void)declare(SymbolKind::Type, spec->name->name, t,
-                                  spec->name->loc, decl);
+                    auto* tsym = declare(SymbolKind::Type, spec->name->name, t,
+                                         spec->name->loc, decl);
+                    if (tsym) decl_sym_map_[spec->name] = tsym;
                 }
                 break;
             }
@@ -47,8 +49,9 @@ void Checker::collect_top_level_decls(ast::File* file) {
                     if (!spec) continue;
                     for (auto* name : spec->names.span()) {
                         if (!name) continue;
-                        (void)declare(SymbolKind::Var, name->name, nullptr,
-                                      name->loc, decl);
+                        auto* vsym = declare(SymbolKind::Var, name->name, nullptr,
+                                             name->loc, decl);
+                        if (vsym) decl_sym_map_[name] = vsym;
                     }
                 }
                 break;
@@ -59,8 +62,9 @@ void Checker::collect_top_level_decls(ast::File* file) {
                     if (!spec) continue;
                     for (auto* name : spec->names.span()) {
                         if (!name) continue;
-                        (void)declare(SymbolKind::Const, name->name, nullptr,
-                                      name->loc, decl);
+                        auto* csym = declare(SymbolKind::Const, name->name, nullptr,
+                                             name->loc, decl);
+                        if (csym) decl_sym_map_[name] = csym;
                     }
                 }
                 break;
@@ -128,11 +132,25 @@ void Checker::check_func_decl(ast::FuncDecl& decl) {
 
         // Add parameters to scope
         if (func_type->func) {
+            size_t param_idx = 0;
             for (const auto& param : func_type->func->params) {
                 if (!param.name.empty() && param.name != "_") {
-                    (void)declare(SymbolKind::Var, param.name, param.type,
-                                  decl.loc);
+                    auto* psym = declare(SymbolKind::Var, param.name, param.type,
+                                         decl.loc);
+                    // Record decl_sym_map_ for IR generator
+                    if (psym && decl.type && decl.type->params) {
+                        size_t ast_idx = 0;
+                        for (auto* field : decl.type->params->fields) {
+                            for (auto* name_node : field->names) {
+                                if (ast_idx == param_idx && name_node) {
+                                    decl_sym_map_[name_node] = psym;
+                                }
+                                ++ast_idx;
+                            }
+                        }
+                    }
                 }
+                ++param_idx;
             }
             // Add named return values to scope
             for (const auto& result : func_type->func->results) {
@@ -205,17 +223,33 @@ void Checker::check_method(ast::FuncDecl& decl) {
             if (!recv_name.empty() && recv_name != "_") {
                 auto* recv_sym = declare(SymbolKind::Var, recv_name, recv_type, decl.loc);
                 // Mark receiver as used — Go doesn't require receivers to be used
-                if (recv_sym) recv_sym->used = true;
+                if (recv_sym) {
+                    recv_sym->used = true;
+                    decl_sym_map_[recv_field->names[0]] = recv_sym;
+                }
             }
         }
 
         // Add parameters to scope
         if (func_type->func) {
+            size_t param_idx = 0;
             for (const auto& param : func_type->func->params) {
                 if (!param.name.empty() && param.name != "_") {
-                    (void)declare(SymbolKind::Var, param.name, param.type,
-                                  decl.loc);
+                    auto* psym = declare(SymbolKind::Var, param.name, param.type,
+                                         decl.loc);
+                    if (psym && decl.type && decl.type->params) {
+                        size_t ast_idx = 0;
+                        for (auto* field : decl.type->params->fields) {
+                            for (auto* name_node : field->names) {
+                                if (ast_idx == param_idx && name_node) {
+                                    decl_sym_map_[name_node] = psym;
+                                }
+                                ++ast_idx;
+                            }
+                        }
+                    }
                 }
+                ++param_idx;
             }
             for (const auto& result : func_type->func->results) {
                 if (!result.name.empty() && result.name != "_") {
@@ -292,7 +326,12 @@ void Checker::check_var_spec(ast::VarSpec& spec) {
         if (sym) {
             sym->type = var_type;
         } else {
-            (void)declare(SymbolKind::Var, name->name, var_type, name->loc);
+            sym = declare(SymbolKind::Var, name->name, var_type, name->loc);
+        }
+
+        // Record for IR generator (VarSpec names are IdentExpr*, not Expr*)
+        if (sym) {
+            decl_sym_map_[name] = sym;
         }
     }
 }

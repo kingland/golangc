@@ -43,8 +43,22 @@ add_library(golangc_sema STATIC
 target_include_directories(golangc_sema PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(golangc_sema PUBLIC golangc_ast golangc_common)
 
+# IR library
+add_library(golangc_ir STATIC
+    ir/ir.cpp
+    ir/ir_type_map.cpp
+    ir/ir_builder.cpp
+    ir/ir_gen.cpp
+    ir/ir_gen_decl.cpp
+    ir/ir_gen_expr.cpp
+    ir/ir_gen_stmt.cpp
+    ir/ir_printer.cpp
+)
+target_include_directories(golangc_ir PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(golangc_ir PUBLIC golangc_sema golangc_ast golangc_common)
+
 # Compiler driver executable
 add_executable(golangc
     driver/main.cpp
 )
-target_link_libraries(golangc PRIVATE golangc_parser golangc_sema)
+target_link_libraries(golangc PRIVATE golangc_parser golangc_sema golangc_ir)
