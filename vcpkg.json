@@ -1,0 +1,9 @@
+{
+  "name": "golang-compiler",
+  "version": "0.1.0",
+  "description": "A Go compiler implemented in modern C++ targeting Windows x86-64",
+  "dependencies": [
+    "fmt",
+    "gtest"
+  ]
+}
