@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 5 (Intermediate Representation) - Complete
-## Current Milestone: Phase 5 complete - SSA-style IR generation with 71 tests passing
-## Completion Estimate: Phase 5 ~100%
+## Current Phase: 6 (Code Generation) - Complete
+## Current Milestone: Phase 6 complete - x86-64 code gen with 44 tests, hello.go + fibonacci.go → working .exe files
+## Completion Estimate: Phase 6 ~100%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -14,9 +14,9 @@
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 5 sample programs parse |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction |
 | IR | ✅ Complete | 71 | SSA-style IR with alloca-based locals, all 5 samples generate IR |
-| CodeGen | ⬜ Not Started | 0 | |
-| Runtime | ⬜ Not Started | 0 | |
-| Linker | ⬜ Not Started | 0 | |
+| CodeGen | ✅ Complete | 44 | x86-64 MASM output, stack-based alloca model, Windows x64 ABI |
+| Runtime | ✅ Complete | - | println_int, println_string, println_bool, panic |
+| Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
 
@@ -355,9 +355,79 @@
 - SSA-style IR with alloca-based locals, ready for mem2reg optimization
 - Error-free IR generation for all 5 sample programs
 
+### Session 6 - Phase 6: x86-64 Code Generation
+#### Completed
+- **Code Generator** (`src/codegen/x64_codegen.hpp`, `x64_codegen.cpp`, `x64_codegen_inst.cpp`):
+  - X64Reg enum (RAX-R15, XMM0-XMM15), RegSize (Byte/Word/DWord/QWord), reg_name() helper
+  - FrameLayout class: maps IR allocas → [RBP-offset] stack slots, 16-byte aligned frames
+  - Two-pass frame allocation: prescan all value-producing instructions before emitting prologue
+  - MASM assembly output: _TEXT SEGMENT, PROC/ENDP, _DATA SEGMENT, EXTERN declarations
+  - Function prologue/epilogue: push rbp, mov rbp rsp, sub rsp frame_size / add rsp, pop rbp, ret
+  - Windows x64 ABI: params in RCX/RDX/R8/R9, shadow space, RAX return
+  - Instruction selection for ~30 IR opcodes:
+    - Constants: ConstInt, ConstBool, ConstString (data section with DB bytes)
+    - Memory: Alloca (no-op, frame pre-allocated), Load, Store (scalar + string struct)
+    - Arithmetic: Add, Sub, Mul (via r10 scratch register), Div/Rem (cqo + idiv), Neg
+    - Bitwise: And, Or, Xor, Shl, Shr, AndNot, BitNot
+    - Comparison: Eq/Ne/Lt/Le/Gt/Ge → CMP + SETcc + MOVZX
+    - Logical: LogNot (test + sete)
+    - Control flow: Br (jmp), CondBr (test + jne/jmp), Ret (load RAX + epilogue)
+    - Calls: marshal args to registers, shadow space alloc, call, save RAX result
+    - Println: dispatch to runtime based on arg type (int/string/bool)
+    - Conversions: SExt, ZExt, Trunc (masking)
+    - GetPtr: struct field access via LEA with offset
+  - String handling: {ptr, i64} layout with separate data/length slots
+  - Label sanitization: dots → $ for MASM compatibility
+
+- **Runtime Library** (`src/runtime/runtime.hpp`, `src/runtime/runtime.cpp`):
+  - `golangc_println_int(int64_t)` — printf %lld\n
+  - `golangc_println_string(const char*, int64_t)` — printf %.*s\n
+  - `golangc_println_bool(int64_t)` — "true"/"false"\n
+  - `golangc_panic(const char*)` — fprintf + exit(2)
+  - Built as static library golangc_runtime.lib
+
+- **Driver Updates** (`src/driver/main.cpp`):
+  - `--emit-asm` flag: generate MASM assembly to stdout
+  - `-o output.exe` flag: full pipeline IR → asm → ml64 → link → .exe
+  - Auto-discover golangc_runtime.lib relative to executable
+  - Version bumped to 0.5.0
+
+- **Build System**:
+  - `golangc_codegen` library (x64_codegen.cpp, x64_codegen_inst.cpp), linked to ir/common
+  - `golangc_runtime` static library (runtime.cpp)
+  - `test_codegen` executable with 44 tests
+
+- **44 codegen tests** covering:
+  - Register names (4): qword, dword, byte, xmm
+  - Frame layout (3): basic allocation, alignment, reset
+  - Helpers (3): masm_name, type_size, is_string_type
+  - Module structure (3): empty main, module header, text segment
+  - Constants (2): int, bool
+  - Arithmetic (6): add, sub, mul, div, rem, neg
+  - Comparisons (2): equality, less-than
+  - Control flow (2): if statement, for loop
+  - Function calls (3): basic call, recursive call, multiple params
+  - Println (3): int, string, expression
+  - End-to-end assembly (2): hello world, fibonacci — full MASM structure verification
+  - Bitwise (4): and, or, xor, shift
+  - Logical not (1)
+  - Return (2): int, void
+  - Multiple functions (1)
+  - Variables (1): local variable assignment
+  - Complex programs (2): GCD, conditional
+
+- **End-to-end executables**:
+  - `golangc --emit-asm samples/hello.go` → valid MASM, assembles with ml64
+  - hello.exe: prints "Hello, World!" and exits 0
+  - `golangc --emit-asm samples/fibonacci.go` → valid MASM, assembles with ml64
+  - fib.exe: prints "55" and exits 0
+
+#### Current State
+- Code generation is functional for integer programs with functions, control flow, recursion
+- All 431 total tests pass (30 common + 89 lexer + 87 parser + 110 sema + 71 IR + 44 codegen)
+- Two milestone programs compile and run correctly as native Windows x64 executables
+- Stack-based code gen (no register allocation); future optimization opportunity
+
 #### Next Steps
-- **Phase 6**: Code Generation (x86-64)
-  - Instruction selection from IR
-  - Register allocation
-  - Stack frame layout
-  - PE format output
+- **Phase 7**: Runtime Library (goroutine scheduler, GC, channels)
+- **Phase 8**: PE Linker (direct PE generation without ml64/link.exe dependency)

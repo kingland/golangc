@@ -38,3 +38,10 @@ add_executable(test_ir
 )
 target_link_libraries(test_ir PRIVATE golangc_ir golangc_sema golangc_parser golangc_lexer GTest::gtest GTest::gtest_main)
 add_test(NAME IRTests COMMAND test_ir)
+
+# Code generation tests
+add_executable(test_codegen
+    codegen/test_codegen.cpp
+)
+target_link_libraries(test_codegen PRIVATE golangc_codegen golangc_ir golangc_sema golangc_parser golangc_lexer GTest::gtest GTest::gtest_main)
+add_test(NAME CodegenTests COMMAND test_codegen)

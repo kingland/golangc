@@ -57,8 +57,22 @@ add_library(golangc_ir STATIC
 target_include_directories(golangc_ir PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(golangc_ir PUBLIC golangc_sema golangc_ast golangc_common)
 
+# Code generation library
+add_library(golangc_codegen STATIC
+    codegen/x64_codegen.cpp
+    codegen/x64_codegen_inst.cpp
+)
+target_include_directories(golangc_codegen PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(golangc_codegen PUBLIC golangc_ir golangc_common)
+
+# Runtime library (linked into generated executables)
+add_library(golangc_runtime STATIC
+    runtime/runtime.cpp
+)
+target_include_directories(golangc_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
 # Compiler driver executable
 add_executable(golangc
     driver/main.cpp
 )
-target_link_libraries(golangc PRIVATE golangc_parser golangc_sema golangc_ir)
+target_link_libraries(golangc PRIVATE golangc_parser golangc_sema golangc_ir golangc_codegen)
