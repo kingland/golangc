@@ -373,6 +373,7 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
     // Method call detection
     std::string method_name;
     Value* receiver = nullptr;
+    bool is_interface_call = false;
 
     if (call.func->kind == ast::ExprKind::Selector) {
         auto& sel = call.func->selector;
@@ -381,18 +382,33 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
             auto* base_type = sema::underlying(base_info->type);
             bool is_ptr = base_type->kind == sema::TypeKind::Pointer;
             auto* concrete = is_ptr ? sema::underlying(base_type->pointer.base) : base_type;
-            (void)concrete;
 
-            std::string type_name;
-            if (base_info->type->kind == sema::TypeKind::Named) {
-                type_name = std::string(base_info->type->named->name);
-            } else if (is_ptr && base_info->type->pointer.base->kind == sema::TypeKind::Named) {
-                type_name = std::string(base_info->type->pointer.base->named->name);
-            }
-
-            if (!type_name.empty()) {
-                method_name = type_name + "." + std::string(sel.sel->name);
+            // Check if calling a method on an interface value
+            if (concrete->kind == sema::TypeKind::Interface) {
+                is_interface_call = true;
                 receiver = gen_expr(sel.x);
+                // For interface method calls, we need to find a concrete implementation.
+                // Search func_name_map_ for any "TypeName.MethodName" that matches.
+                std::string method_sel(sel.sel->name);
+                for (auto& [fname, fval] : func_name_map_) {
+                    auto dot = fname.find('.');
+                    if (dot != std::string::npos && fname.substr(dot + 1) == method_sel) {
+                        method_name = fname;
+                        break;
+                    }
+                }
+            } else {
+                std::string type_name;
+                if (base_info->type->kind == sema::TypeKind::Named) {
+                    type_name = std::string(base_info->type->named->name);
+                } else if (is_ptr && base_info->type->pointer.base->kind == sema::TypeKind::Named) {
+                    type_name = std::string(base_info->type->pointer.base->named->name);
+                }
+
+                if (!type_name.empty()) {
+                    method_name = type_name + "." + std::string(sel.sel->name);
+                    receiver = gen_expr(sel.x);
+                }
             }
         }
     }
@@ -405,11 +421,44 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
     if (!callee) callee = gen_expr(call.func);
     if (!callee) return builder_.create_const_int(type_map_.i64_type(), 0, "bad_call");
 
+    // For interface method calls, the receiver is the interface value's data.
+    // Extract the concrete value from the interface before passing as receiver.
+    if (is_interface_call && receiver) {
+        // Extract the data portion from the interface value
+        auto* iface_data = builder_.create_interface_data(receiver, type_map_.i64_type(), "iface.data");
+        receiver = iface_data;
+    }
+
     std::vector<Value*> args;
     if (receiver) args.push_back(receiver);
-    for (auto* arg_expr : call.args) {
-        auto* arg = gen_expr(arg_expr);
-        if (arg) args.push_back(arg);
+
+    // Get the callee's function type to detect interface parameters
+    const sema::FuncType* callee_sema_func = nullptr;
+    auto* callee_func_info = expr_info(call.func);
+    if (callee_func_info && callee_func_info->type) {
+        auto* ft = sema::underlying(callee_func_info->type);
+        if (ft && ft->kind == sema::TypeKind::Func) {
+            callee_sema_func = ft->func;
+        }
+    }
+
+    for (uint32_t i = 0; i < call.args.count; ++i) {
+        auto* arg = gen_expr(call.args[i]);
+        if (!arg) continue;
+
+        // Check if this argument needs interface boxing
+        if (callee_sema_func && i < callee_sema_func->params.size()) {
+            auto* param_type = sema::underlying(callee_sema_func->params[i].type);
+            auto* arg_info = expr_info(call.args[i]);
+            if (param_type && param_type->kind == sema::TypeKind::Interface &&
+                arg_info && arg_info->type &&
+                sema::underlying(arg_info->type)->kind != sema::TypeKind::Interface) {
+                // Box the concrete value into an interface: InterfaceMake(type_tag, value)
+                auto* type_tag = builder_.create_const_int(type_map_.i64_type(), 1, "type.tag");
+                arg = builder_.create_interface_make(type_tag, arg, "iface");
+            }
+        }
+        args.push_back(arg);
     }
 
     auto* call_info = expr_info(expr);

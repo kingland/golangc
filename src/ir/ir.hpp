@@ -171,6 +171,9 @@ struct Instruction : Value {
     // For ExtractValue/InsertValue: field index
     uint32_t field_index = 0;
 
+    // For Alloca: the type being allocated (separate from `type` which is always ptr)
+    IRType* alloc_type = nullptr;
+
     Instruction() = default;
     Instruction(uint32_t id, Opcode op, IRType* type, std::string name = "")
         : Value(id, type, std::move(name)), opcode(op) {}

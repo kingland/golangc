@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 6 (Code Generation) - Complete
-## Current Milestone: Phase 6 complete - x86-64 code gen with 44 tests, hello.go + fibonacci.go → working .exe files
-## Completion Estimate: Phase 6 ~100%
+## Current Phase: 7 (Structs, Methods & Interfaces Codegen) - Complete
+## Current Milestone: Phase 7 complete - structs, methods, interfaces, sret ABI, multi-arg println (62 codegen tests, structs.go + interfaces.go → working .exe files)
+## Completion Estimate: Phase 7 ~100%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -14,8 +14,8 @@
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 5 sample programs parse |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction |
 | IR | ✅ Complete | 71 | SSA-style IR with alloca-based locals, all 5 samples generate IR |
-| CodeGen | ✅ Complete | 44 | x86-64 MASM output, stack-based alloca model, Windows x64 ABI |
-| Runtime | ✅ Complete | - | println_int, println_string, println_bool, panic |
+| CodeGen | ✅ Complete | 62 | x86-64 MASM, structs/methods/interfaces, sret ABI, multi-arg println |
+| Runtime | ✅ Complete | - | println_*, print_*, print_space, print_newline, panic |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
@@ -429,5 +429,71 @@
 - Stack-based code gen (no register allocation); future optimization opportunity
 
 #### Next Steps
-- **Phase 7**: Runtime Library (goroutine scheduler, GC, channels)
+- **Phase 7**: Structs, Methods & Interfaces Codegen
+
+### Session 7 - Phase 7: Structs, Methods & Interfaces Codegen
+#### Completed
+- **GetPtr + Load/Store Indirection** (`x64_codegen_inst.cpp`):
+  - `emit_load`: detects GetPtr source, loads address from temp slot, dereferences through pointer
+  - `emit_store`: detects GetPtr destination, stores value through computed pointer
+  - Enables struct field read/write via `getptr` → `load`/`store` pattern
+
+- **Multi-QWORD Struct Load/Store** (`x64_codegen_inst.cpp`, `x64_codegen.cpp`):
+  - Generalized `emit_load`/`emit_store` to copy N QWORDs for struct-typed values
+  - `type_qwords()` helper computes number of 8-byte slots for any IR type
+  - `prescan_temps` allocates contiguous struct-sized temp slots with aliased extra QWORDs
+  - `src_qword_off` lambda handles both temp slot aliases and contiguous layout fallback
+  - String {ptr, i64} now handled as generic 2-QWORD struct (no special case)
+
+- **Struct Passing in Calls + Returns** (Windows x64 ABI):
+  - Large structs (>8 bytes) passed by pointer: caller passes `LEA` of value's stack slot
+  - sret (struct return): caller allocates temp, passes address as implicit first arg (RCX)
+  - Callee prologue: saves sret pointer to hidden slot, shifts param registers by 1
+  - Callee return: copies struct value through sret pointer, returns pointer in RAX
+  - `is_large_struct()`, `emit_struct_copy()` helpers
+
+- **IR Enhancement** (`src/ir/ir.hpp`, `src/ir/ir_builder.cpp`):
+  - Added `alloc_type` field to `Instruction` — tracks type allocated by Alloca
+    (separate from `inst->type` which is always `ptr`)
+  - `scan_allocas` uses `alloc_type` for correct struct sizing
+
+- **Multi-arg Println with Spaces** (`x64_codegen_inst.cpp`):
+  - New runtime: `golangc_print_int`, `golangc_print_string`, `golangc_print_bool`,
+    `golangc_print_space`, `golangc_print_newline`
+  - Single-arg: uses `golangc_println_*` (value + newline)
+  - Multi-arg: uses `golangc_print_*` + `print_space` between + `print_newline` at end
+  - No-arg: just `print_newline`
+
+- **Interface Codegen** (`x64_codegen_inst.cpp`, `ir_gen_expr.cpp`):
+  - `InterfaceMake`: stores {type_tag, data_value} in 2-QWORD temp slot
+  - `InterfaceData`: extracts data pointer (second QWORD) from interface struct
+  - IR gen: interface method calls resolved by searching `func_name_map_` for method name
+  - IR gen: automatic interface boxing when passing concrete type as interface parameter
+  - Static method dispatch (sufficient for single concrete type)
+
+- **Runtime Library** (`src/runtime/runtime.hpp`, `src/runtime/runtime.cpp`):
+  - Added 5 new functions: print_int, print_string, print_bool, print_space, print_newline
+
+- **18 new codegen tests** (44 → 62 total):
+  - Structs: StructCompositeLiteral, StructFieldAccess, StructFieldWrite, StructMethod,
+    StructSretReturn, StructPassByPointer, StructsGoFull
+  - Println: PrintlnMultiArg, PrintlnSingleArg, PrintlnNoArgs
+  - Interfaces: InterfaceMake, InterfaceMethodCall, InterfacesGoFull
+  - GetPtr: GetPtrLoadIndirection, GetPtrStoreIndirection
+  - Type helpers: StructTypeSize, SmallStructNotLarge, TypeQwords
+
+- **End-to-end executables**:
+  - structs.exe: prints "4 6" (Point{1,2}.Add(Point{3,4})) ✅
+  - interfaces.exe: prints "MyInt" (MyInt(42) implementing Stringer) ✅
+  - hello.exe: prints "Hello, World!" (regression) ✅
+  - fib.exe: prints "55" (regression) ✅
+
+#### Current State
+- Struct and interface codegen fully functional
+- All 449 total tests pass (30 common + 89 lexer + 87 parser + 110 sema + 71 IR + 62 codegen)
+- Four milestone programs compile and run correctly as native Windows x64 executables
+- Windows x64 ABI compliance for struct passing/return (sret convention)
+
+#### Next Steps
 - **Phase 8**: PE Linker (direct PE generation without ml64/link.exe dependency)
+- **Future**: Goroutine scheduler, GC, channels, slices, maps

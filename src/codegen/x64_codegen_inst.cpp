@@ -74,6 +74,9 @@ void X64CodeGenerator::emit_instruction(const ir::Instruction& inst,
         case ir::Opcode::Trunc: emit_trunc(inst); break;
         case ir::Opcode::ZExt:  emit_sext(inst); break; // Same pattern for now
 
+        case ir::Opcode::InterfaceMake: emit_interface_make(inst); break;
+        case ir::Opcode::InterfaceData: emit_interface_data(inst); break;
+
         // Not yet implemented — emit comment
         default:
             emit_comment(fmt::format("TODO: {}", ir::opcode_name(inst.opcode)));
@@ -101,10 +104,7 @@ void X64CodeGenerator::emit_const_string(const ir::Instruction& inst) {
     std::string label = fmt::format("__str{}", string_counter_++);
     string_pool_.push_back({label, inst.imm_string, static_cast<int64_t>(inst.imm_string.size())});
 
-    // A string in Go is {ptr, len} — store both parts
-    // The alloca for this string will be a 16-byte struct {ptr, i64}
-    // For now, store ptr in one temp slot and len in another,
-    // but since the IR treats strings as struct {ptr, i64}, we need to store both fields.
+    // A string in Go is {ptr, len} — store both QWORDs
     auto slot = get_temp_slot(inst.id);
     // Store pointer to string data
     emit(fmt::format("lea rax, [{}]", label));
@@ -121,7 +121,6 @@ void X64CodeGenerator::emit_const_string(const ir::Instruction& inst) {
 
 void X64CodeGenerator::emit_alloca(const ir::Instruction& inst) {
     // Allocas are handled in scan_allocas; no code emitted.
-    // The frame slot is already assigned.
     (void)inst;
 }
 
@@ -129,23 +128,67 @@ void X64CodeGenerator::emit_load(const ir::Instruction& inst) {
     auto* ptr = inst.operands[0];
     auto slot = get_temp_slot(inst.id);
 
-    // If loading a string (struct {ptr, i64}), load both fields
-    if (is_string_type(inst.type)) {
-        // ptr is an alloca for a string — load ptr field
-        if (frame_.has_slot(ptr->id)) {
-            auto ptr_off = frame_.offset_of(ptr->id);
-            emit(fmt::format("mov rax, QWORD PTR [rbp{}]", ptr_off));
-            emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
-            // Load length field (stored at ptr_off - 8)
-            auto len_slot = get_temp_slot(inst.id + 100000);
-            emit(fmt::format("mov rax, QWORD PTR [rbp{}]", ptr_off - 8));
-            emit(fmt::format("mov QWORD PTR [rbp{}], rax", len_slot));
+    // Determine if the source is a GetPtr (computed address in a temp slot)
+    bool src_is_getptr = is_getptr(ptr);
+
+    // Struct types: copy N QWORDs
+    if (inst.type && inst.type->is_struct()) {
+        int32_t nq = type_qwords(inst.type);
+
+        if (src_is_getptr) {
+            // GetPtr result is an address in a temp slot — dereference through it
+            int32_t addr_slot = 0;
+            if (temp_slots_.count(ptr->id))
+                addr_slot = temp_slots_[ptr->id];
+            else if (frame_.has_slot(ptr->id))
+                addr_slot = frame_.offset_of(ptr->id);
+
+            emit(fmt::format("mov rcx, QWORD PTR [rbp{}]", addr_slot));
+            // Load N QWORDs through the pointer
+            for (int32_t q = 0; q < nq; ++q) {
+                emit(fmt::format("mov rax, QWORD PTR [rcx+{}]", q * 8));
+                if (q == 0) {
+                    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+                } else {
+                    auto extra_slot = get_temp_slot(inst.id + static_cast<uint32_t>(q) * 100000);
+                    emit(fmt::format("mov QWORD PTR [rbp{}], rax", extra_slot));
+                }
+            }
+        } else {
+            // Direct alloca: copy from frame slot
+            // Fields are at ascending offsets: base, base+8, base+16, ...
+            int32_t src_off = 0;
+            if (frame_.has_slot(ptr->id))
+                src_off = frame_.offset_of(ptr->id);
+            else if (temp_slots_.count(ptr->id))
+                src_off = temp_slots_[ptr->id];
+
+            for (int32_t q = 0; q < nq; ++q) {
+                emit(fmt::format("mov rax, QWORD PTR [rbp{}]", src_off + q * 8));
+                if (q == 0) {
+                    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+                } else {
+                    auto extra_slot = get_temp_slot(inst.id + static_cast<uint32_t>(q) * 100000);
+                    emit(fmt::format("mov QWORD PTR [rbp{}], rax", extra_slot));
+                }
+            }
         }
         return;
     }
 
-    // Normal scalar load: load from the address stored in the alloca slot
-    if (frame_.has_slot(ptr->id)) {
+    // Scalar load
+    if (src_is_getptr) {
+        // GetPtr result is an address in a temp slot — dereference through it
+        int32_t addr_slot = 0;
+        if (temp_slots_.count(ptr->id))
+            addr_slot = temp_slots_[ptr->id];
+        else if (frame_.has_slot(ptr->id))
+            addr_slot = frame_.offset_of(ptr->id);
+
+        emit(fmt::format("mov rcx, QWORD PTR [rbp{}]", addr_slot));
+        emit("mov rax, QWORD PTR [rcx]");
+        emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+    } else if (frame_.has_slot(ptr->id)) {
         emit(fmt::format("mov rax, QWORD PTR [rbp{}]", frame_.offset_of(ptr->id)));
         emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
     } else if (temp_slots_.count(ptr->id)) {
@@ -158,43 +201,76 @@ void X64CodeGenerator::emit_store(const ir::Instruction& inst) {
     auto* val = inst.operands[0];
     auto* ptr = inst.operands[1];
 
-    // Check if storing a string value (struct {ptr, i64})
-    if (val->type && is_string_type(val->type)) {
-        // val is a ConstString or Load of a string — copy both fields
+    // Determine if destination is a GetPtr (computed address in a temp slot)
+    bool dst_is_getptr = is_getptr(ptr);
+
+    // Struct types: copy N QWORDs
+    if (val->type && val->type->is_struct()) {
+        int32_t nq = type_qwords(val->type);
+
+        // Find source base slot
         int32_t val_slot = 0;
-        int32_t val_len_slot = 0;
-        bool have_val = false;
-
-        if (temp_slots_.count(val->id)) {
+        if (temp_slots_.count(val->id))
             val_slot = temp_slots_[val->id];
-            // Length stored at val->id + 100000
-            auto len_it = temp_slots_.find(val->id + 100000);
-            if (len_it != temp_slots_.end()) {
-                val_len_slot = len_it->second;
-            } else if (frame_.has_slot(val->id + 100000)) {
-                val_len_slot = frame_.offset_of(val->id + 100000);
-            }
-            have_val = true;
-        }
+        else if (frame_.has_slot(val->id))
+            val_slot = frame_.offset_of(val->id);
 
-        if (have_val && frame_.has_slot(ptr->id)) {
-            auto ptr_off = frame_.offset_of(ptr->id);
-            // Copy ptr field
-            emit(fmt::format("mov rax, QWORD PTR [rbp{}]", val_slot));
-            emit(fmt::format("mov QWORD PTR [rbp{}], rax", ptr_off));
-            // Copy length field
-            emit(fmt::format("mov rax, QWORD PTR [rbp{}]", val_len_slot));
-            emit(fmt::format("mov QWORD PTR [rbp{}], rax", ptr_off - 8));
+        // Helper: get the offset for QWORD q of the source value.
+        // For temp slots, extra QWORDs may be aliased at id+q*100000.
+        // For frame/param slots (contiguous alloca), use val_slot + q*8.
+        auto src_qword_off = [&](int32_t q) -> int32_t {
+            if (q == 0) return val_slot;
+            uint32_t extra_id = val->id + static_cast<uint32_t>(q) * 100000;
+            auto it = temp_slots_.find(extra_id);
+            if (it != temp_slots_.end()) return it->second;
+            // Contiguous layout: ascending offsets from base
+            return val_slot + q * 8;
+        };
+
+        if (dst_is_getptr) {
+            // Destination is a computed address — store through pointer
+            int32_t addr_slot = 0;
+            if (temp_slots_.count(ptr->id))
+                addr_slot = temp_slots_[ptr->id];
+            else if (frame_.has_slot(ptr->id))
+                addr_slot = frame_.offset_of(ptr->id);
+
+            emit(fmt::format("mov rcx, QWORD PTR [rbp{}]", addr_slot));
+            for (int32_t q = 0; q < nq; ++q) {
+                emit(fmt::format("mov rax, QWORD PTR [rbp{}]", src_qword_off(q)));
+                emit(fmt::format("mov QWORD PTR [rcx+{}], rax", q * 8));
+            }
+        } else {
+            // Direct alloca destination: copy QWORD by QWORD
+            // Fields are at ascending offsets: base, base+8, base+16, ...
+            int32_t dst_off = 0;
+            if (frame_.has_slot(ptr->id))
+                dst_off = frame_.offset_of(ptr->id);
+            else if (temp_slots_.count(ptr->id))
+                dst_off = temp_slots_[ptr->id];
+
+            for (int32_t q = 0; q < nq; ++q) {
+                emit(fmt::format("mov rax, QWORD PTR [rbp{}]", src_qword_off(q)));
+                emit(fmt::format("mov QWORD PTR [rbp{}], rax", dst_off + q * 8));
+            }
         }
         return;
     }
 
-    // Normal scalar store
-    // Load value into RAX
+    // Scalar store
     load_value_to_rax(val);
 
-    // Store to the destination alloca
-    if (frame_.has_slot(ptr->id)) {
+    if (dst_is_getptr) {
+        // Store through computed address
+        int32_t addr_slot = 0;
+        if (temp_slots_.count(ptr->id))
+            addr_slot = temp_slots_[ptr->id];
+        else if (frame_.has_slot(ptr->id))
+            addr_slot = frame_.offset_of(ptr->id);
+
+        emit(fmt::format("mov rcx, QWORD PTR [rbp{}]", addr_slot));
+        emit("mov QWORD PTR [rcx], rax");
+    } else if (frame_.has_slot(ptr->id)) {
         emit(fmt::format("mov QWORD PTR [rbp{}], rax", frame_.offset_of(ptr->id)));
     } else if (temp_slots_.count(ptr->id)) {
         emit(fmt::format("mov QWORD PTR [rbp{}], rax", temp_slots_[ptr->id]));
@@ -207,11 +283,34 @@ void X64CodeGenerator::emit_getptr(const ir::Instruction& inst) {
     if (inst.operands.size() == 1) {
         // Field access: getptr base, #field_index
         auto* base = inst.operands[0];
+        int32_t base_off = 0;
+        bool have_base = false;
+
         if (frame_.has_slot(base->id)) {
-            auto base_off = frame_.offset_of(base->id);
-            int32_t field_off = static_cast<int32_t>(inst.field_index) * 8;
-            emit(fmt::format("lea rax, [rbp{}]", base_off - field_off));
-            emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+            base_off = frame_.offset_of(base->id);
+            have_base = true;
+        } else if (temp_slots_.count(base->id)) {
+            base_off = temp_slots_[base->id];
+            have_base = true;
+        }
+
+        if (have_base) {
+            // If base is itself a GetPtr result (pointer), we need to
+            // dereference through the pointer first, then add the field offset
+            if (is_getptr(base)) {
+                emit(fmt::format("mov rax, QWORD PTR [rbp{}]", base_off));
+                int32_t field_off = static_cast<int32_t>(inst.field_index) * 8;
+                if (field_off != 0) {
+                    emit(fmt::format("add rax, {}", field_off));
+                }
+                emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+            } else {
+                // Struct fields are at ascending offsets from the base address:
+                // field 0 at base_off, field 1 at base_off + 8, etc.
+                int32_t field_off = static_cast<int32_t>(inst.field_index) * 8;
+                emit(fmt::format("lea rax, [rbp{}]", base_off + field_off));
+                emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+            }
         }
     } else if (inst.operands.size() >= 2) {
         // Indexed access: getptr base, index
@@ -373,7 +472,37 @@ void X64CodeGenerator::emit_condbr(const ir::Instruction& inst) {
 
 void X64CodeGenerator::emit_ret(const ir::Instruction& inst, const ir::Function& func) {
     if (!inst.operands.empty()) {
-        load_value_to_rax(inst.operands[0]);
+        auto* ret_val = inst.operands[0];
+
+        // Check if returning a large struct via sret pointer
+        if (has_sret_ && ret_val->type && is_large_struct(ret_val->type)) {
+            int32_t nq = type_qwords(ret_val->type);
+            // Load the sret pointer
+            emit(fmt::format("mov rcx, QWORD PTR [rbp{}]", sret_slot_));
+
+            // Copy struct value to sret pointer location
+            int32_t val_slot = 0;
+            if (temp_slots_.count(ret_val->id))
+                val_slot = temp_slots_[ret_val->id];
+            else if (frame_.has_slot(ret_val->id))
+                val_slot = frame_.offset_of(ret_val->id);
+
+            for (int32_t q = 0; q < nq; ++q) {
+                int32_t src_off = val_slot;
+                if (q > 0) {
+                    uint32_t extra_id = ret_val->id + static_cast<uint32_t>(q) * 100000;
+                    auto it = temp_slots_.find(extra_id);
+                    if (it != temp_slots_.end()) src_off = it->second;
+                    else src_off = val_slot + q * 8; // Contiguous layout
+                }
+                emit(fmt::format("mov rax, QWORD PTR [rbp{}]", src_off));
+                emit(fmt::format("mov QWORD PTR [rcx+{}], rax", q * 8));
+            }
+            // Return the sret pointer in RAX (Windows x64 convention)
+            emit(fmt::format("mov rax, QWORD PTR [rbp{}]", sret_slot_));
+        } else {
+            load_value_to_rax(ret_val);
+        }
     } else {
         // Void return — zero RAX so main() returns 0 as process exit code
         emit("xor eax, eax");
@@ -389,27 +518,57 @@ void X64CodeGenerator::emit_ret(const ir::Instruction& inst, const ir::Function&
 void X64CodeGenerator::emit_call(const ir::Instruction& inst) {
     auto* callee = inst.operands[0];
 
-    // Marshal arguments into registers (Windows x64 ABI)
-    size_t num_args = inst.operands.size() - 1;
-    for (size_t i = 0; i < num_args && i < kMaxRegArgs; ++i) {
-        load_value_to_reg(inst.operands[i + 1], kArgRegs[i]);
+    // Check if callee returns a large struct (need sret)
+    bool callee_sret = false;
+    int32_t sret_temp_slot = 0;
+    auto* callee_func = dynamic_cast<const ir::Function*>(callee);
+    if (callee_func && callee_func->return_type && is_large_struct(callee_func->return_type)) {
+        callee_sret = true;
+    } else if (inst.type && is_large_struct(inst.type)) {
+        callee_sret = true;
     }
 
-    // Stack arguments for > 4 args
-    if (num_args > kMaxRegArgs) {
-        for (size_t i = num_args; i > kMaxRegArgs; --i) {
+    // If sret, we need to allocate space and pass pointer as first arg (RCX)
+    // The result temp slot already has enough space from prescan_temps
+    if (callee_sret) {
+        sret_temp_slot = get_temp_slot(inst.id);
+        emit(fmt::format("lea rcx, [rbp{}]", sret_temp_slot));
+    }
+
+    // Marshal arguments into registers (Windows x64 ABI)
+    size_t num_args = inst.operands.size() - 1;
+    size_t reg_offset = callee_sret ? 1 : 0; // sret takes RCX
+
+    for (size_t i = 0; i < num_args && (i + reg_offset) < kMaxRegArgs; ++i) {
+        auto* arg = inst.operands[i + 1];
+
+        // Large struct args: pass pointer to the value's stack slot
+        if (arg->type && is_large_struct(arg->type)) {
+            int32_t arg_slot = 0;
+            if (temp_slots_.count(arg->id))
+                arg_slot = temp_slots_[arg->id];
+            else if (frame_.has_slot(arg->id))
+                arg_slot = frame_.offset_of(arg->id);
+            emit(fmt::format("lea {}, [rbp{}]", reg_name(kArgRegs[i + reg_offset]), arg_slot));
+        } else {
+            load_value_to_reg(arg, kArgRegs[i + reg_offset]);
+        }
+    }
+
+    // Stack arguments for > 4 args (accounting for sret offset)
+    if ((num_args + reg_offset) > kMaxRegArgs) {
+        for (size_t i = num_args; (i + reg_offset) > kMaxRegArgs; --i) {
             load_value_to_rax(inst.operands[i]);
             emit("push rax");
         }
     }
 
-    // Allocate shadow space (already part of frame, but ensure alignment)
+    // Allocate shadow space
     emit(fmt::format("sub rsp, {}", kShadowSpace));
 
     // Call the function
-    auto* func = dynamic_cast<const ir::Function*>(callee);
-    if (func) {
-        emit(fmt::format("call {}", masm_name(func->name)));
+    if (callee_func) {
+        emit(fmt::format("call {}", masm_name(callee_func->name)));
     } else {
         load_value_to_reg(callee, X64Reg::R10);
         emit("call r10");
@@ -418,13 +577,18 @@ void X64CodeGenerator::emit_call(const ir::Instruction& inst) {
     emit(fmt::format("add rsp, {}", kShadowSpace));
 
     // Clean up stack arguments
-    if (num_args > kMaxRegArgs) {
-        int32_t stack_args_size = static_cast<int32_t>(num_args - kMaxRegArgs) * 8;
+    if ((num_args + reg_offset) > kMaxRegArgs) {
+        int32_t stack_args_size = static_cast<int32_t>(num_args + reg_offset - kMaxRegArgs) * 8;
         emit(fmt::format("add rsp, {}", stack_args_size));
     }
 
-    // Store result (in RAX) if the call produces a value
-    if (inst.type && !inst.type->is_void()) {
+    // Store result
+    if (callee_sret) {
+        // Result already in the sret temp area; RAX points to it.
+        // For the caller, the struct value lives at sret_temp_slot.
+        // Nothing extra to do — subsequent loads will read from there.
+    } else if (inst.type && !inst.type->is_void()) {
+        // Scalar result in RAX
         auto slot = get_temp_slot(inst.id);
         emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
     }
@@ -437,47 +601,41 @@ void X64CodeGenerator::emit_call(const ir::Instruction& inst) {
 void X64CodeGenerator::emit_println(const ir::Instruction& inst) {
     if (inst.operands.empty()) {
         // println() with no args — just print a newline
-        // Not implementing bare newline for now
+        emit(fmt::format("sub rsp, {}", kShadowSpace));
+        emit("call golangc_print_newline");
+        emit(fmt::format("add rsp, {}", kShadowSpace));
         return;
     }
+
+    bool multi_arg = inst.operands.size() > 1;
 
     for (size_t i = 0; i < inst.operands.size(); ++i) {
         auto* arg = inst.operands[i];
 
+        // Print space between arguments
         if (i > 0) {
-            // Print space between arguments
-            // For simplicity, we'll let runtime handle formatting
+            emit(fmt::format("sub rsp, {}", kShadowSpace));
+            emit("call golangc_print_space");
+            emit(fmt::format("add rsp, {}", kShadowSpace));
         }
 
         // Determine type and dispatch to appropriate runtime function
         bool handled = false;
-
-        // Check if the argument is a ConstString
         auto* arg_inst = dynamic_cast<const ir::Instruction*>(arg);
+
+        // Check if string type (ConstString or Load of string)
+        bool is_string_arg = false;
         if (arg_inst && arg_inst->opcode == ir::Opcode::ConstString) {
-            // String argument: call golangc_println_string(ptr, len)
-            if (temp_slots_.count(arg->id)) {
-                auto ptr_slot = temp_slots_[arg->id];
-                emit(fmt::format("mov rcx, QWORD PTR [rbp{}]", ptr_slot));
-                // Length is stored at id + 100000
-                int32_t len_slot = 0;
-                auto len_it = temp_slots_.find(arg->id + 100000);
-                if (len_it != temp_slots_.end()) {
-                    len_slot = len_it->second;
-                } else if (frame_.has_slot(arg->id + 100000)) {
-                    len_slot = frame_.offset_of(arg->id + 100000);
-                }
-                emit(fmt::format("mov rdx, QWORD PTR [rbp{}]", len_slot));
-            }
-            emit(fmt::format("sub rsp, {}", kShadowSpace));
-            emit("call golangc_println_string");
-            emit(fmt::format("add rsp, {}", kShadowSpace));
-            handled = true;
+            is_string_arg = true;
+        } else if (arg_inst && arg_inst->opcode == ir::Opcode::Load &&
+                   is_string_type(arg_inst->type)) {
+            is_string_arg = true;
+        } else if (arg->type && is_string_type(arg->type)) {
+            is_string_arg = true;
         }
 
-        // Check if the argument is a Load of a string type
-        if (!handled && arg_inst && arg_inst->opcode == ir::Opcode::Load &&
-            is_string_type(arg_inst->type)) {
+        if (is_string_arg) {
+            // Load string ptr + len into RCX/RDX
             if (temp_slots_.count(arg->id)) {
                 auto ptr_slot = temp_slots_[arg->id];
                 emit(fmt::format("mov rcx, QWORD PTR [rbp{}]", ptr_slot));
@@ -491,7 +649,11 @@ void X64CodeGenerator::emit_println(const ir::Instruction& inst) {
                 emit(fmt::format("mov rdx, QWORD PTR [rbp{}]", len_slot));
             }
             emit(fmt::format("sub rsp, {}", kShadowSpace));
-            emit("call golangc_println_string");
+            if (multi_arg) {
+                emit("call golangc_print_string");
+            } else {
+                emit("call golangc_println_string");
+            }
             emit(fmt::format("add rsp, {}", kShadowSpace));
             handled = true;
         }
@@ -503,16 +665,29 @@ void X64CodeGenerator::emit_println(const ir::Instruction& inst) {
             if (is_bool) {
                 load_value_to_reg(arg, X64Reg::RCX);
                 emit(fmt::format("sub rsp, {}", kShadowSpace));
-                emit("call golangc_println_bool");
+                if (multi_arg)
+                    emit("call golangc_print_bool");
+                else
+                    emit("call golangc_println_bool");
                 emit(fmt::format("add rsp, {}", kShadowSpace));
             } else {
                 // Default: integer argument
                 load_value_to_reg(arg, X64Reg::RCX);
                 emit(fmt::format("sub rsp, {}", kShadowSpace));
-                emit("call golangc_println_int");
+                if (multi_arg)
+                    emit("call golangc_print_int");
+                else
+                    emit("call golangc_println_int");
                 emit(fmt::format("add rsp, {}", kShadowSpace));
             }
         }
+    }
+
+    // For multi-arg, emit final newline
+    if (multi_arg) {
+        emit(fmt::format("sub rsp, {}", kShadowSpace));
+        emit("call golangc_print_newline");
+        emit(fmt::format("add rsp, {}", kShadowSpace));
     }
 }
 
@@ -523,8 +698,6 @@ void X64CodeGenerator::emit_println(const ir::Instruction& inst) {
 void X64CodeGenerator::emit_sext(const ir::Instruction& inst) {
     auto slot = get_temp_slot(inst.id);
     load_value_to_rax(inst.operands[0]);
-    // For sign-extension, movsx from smaller to larger
-    // Since we store everything as 64-bit on the stack, this is mostly a no-op
     emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
 }
 
@@ -551,6 +724,42 @@ void X64CodeGenerator::emit_trunc(const ir::Instruction& inst) {
         }
     }
     emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+}
+
+// ============================================================================
+// Interface operations
+// ============================================================================
+
+void X64CodeGenerator::emit_interface_make(const ir::Instruction& inst) {
+    // InterfaceMake(type_desc, data) -> {ptr, ptr}
+    // type_desc = first operand (type tag/descriptor)
+    // data = second operand (concrete value to box)
+    auto slot = get_temp_slot(inst.id);
+    auto data_slot = get_temp_slot(inst.id + 100000);
+
+    // Store type descriptor (or tag) in first QWORD
+    load_value_to_rax(inst.operands[0]);
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+
+    // Store data pointer in second QWORD
+    load_value_to_rax(inst.operands[1]);
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", data_slot));
+}
+
+void X64CodeGenerator::emit_interface_data(const ir::Instruction& inst) {
+    // InterfaceData(iface) -> data pointer (second QWORD of interface)
+    auto* iface = inst.operands[0];
+    auto slot = get_temp_slot(inst.id);
+
+    // The interface is a 2-QWORD struct; data is the second QWORD
+    auto data_it = temp_slots_.find(iface->id + 100000);
+    if (data_it != temp_slots_.end()) {
+        emit(fmt::format("mov rax, QWORD PTR [rbp{}]", data_it->second));
+        emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+    } else if (frame_.has_slot(iface->id + 100000)) {
+        emit(fmt::format("mov rax, QWORD PTR [rbp{}]", frame_.offset_of(iface->id + 100000)));
+        emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+    }
 }
 
 } // namespace codegen

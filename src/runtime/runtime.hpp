@@ -16,6 +16,21 @@ void golangc_println_string(const char* data, int64_t length);
 /// Print a boolean ("true"/"false") followed by a newline.
 void golangc_println_bool(int64_t value);
 
+/// Print an integer without a newline.
+void golangc_print_int(int64_t value);
+
+/// Print a string (ptr + length) without a newline.
+void golangc_print_string(const char* data, int64_t length);
+
+/// Print a boolean without a newline.
+void golangc_print_bool(int64_t value);
+
+/// Print a single space.
+void golangc_print_space();
+
+/// Print a newline.
+void golangc_print_newline();
+
 /// Panic with a message and exit.
 [[noreturn]] void golangc_panic(const char* msg);
 

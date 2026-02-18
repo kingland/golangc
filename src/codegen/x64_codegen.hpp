@@ -99,6 +99,12 @@ public:
     /// Check if an IR type is the string struct type {ptr, i64}.
     [[nodiscard]] static bool is_string_type(const ir::IRType* type);
 
+    /// Compute the number of QWORDs needed to represent a type.
+    [[nodiscard]] static int32_t type_qwords(const ir::IRType* type);
+
+    /// Check if a struct type is >8 bytes (needs pass-by-pointer in Windows x64 ABI).
+    [[nodiscard]] static bool is_large_struct(const ir::IRType* type);
+
 private:
     std::string out_;           // Assembly output buffer
     FrameLayout frame_;         // Current function's frame layout
@@ -148,6 +154,8 @@ private:
     void emit_getptr(const ir::Instruction& inst);
     void emit_sext(const ir::Instruction& inst);
     void emit_trunc(const ir::Instruction& inst);
+    void emit_interface_make(const ir::Instruction& inst);
+    void emit_interface_data(const ir::Instruction& inst);
 
     // ---- Helpers ----
     /// Emit a line of assembly (indented with 4 spaces).
@@ -170,6 +178,19 @@ private:
 
     /// Get the address operand string for a value on the stack.
     [[nodiscard]] std::string stack_operand(uint32_t value_id) const;
+
+    /// Copy N QWORDs between two stack locations via RAX.
+    void emit_struct_copy(int32_t dst_offset, int32_t src_offset, int32_t num_qwords);
+
+    /// Check if an IR value is a GetPtr instruction.
+    [[nodiscard]] static bool is_getptr(const ir::Value* val);
+
+    /// Track the current function being compiled (for sret detection).
+    const ir::Function* current_func_ = nullptr;
+
+    /// Sret pointer slot offset (for functions returning large structs).
+    int32_t sret_slot_ = 0;
+    bool has_sret_ = false;
 
     /// Get the MASM block label for a basic block within a function.
     [[nodiscard]] static std::string block_label(const ir::Function& func,

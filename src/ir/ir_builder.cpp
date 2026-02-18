@@ -226,16 +226,7 @@ Instruction* IRBuilder::create_lognot(Value* operand, const std::string& name) {
 
 Instruction* IRBuilder::create_alloca(IRType* alloc_type, const std::string& name) {
     auto* inst = emit(Opcode::Alloca, type_map_.ptr_type(), name);
-    // Store the allocated type in imm_int as a type tag (we store the type pointer)
-    // We use the operands list to carry type info indirectly
-    // Actually, we'll store the alloc_type in a side channel: the inst's type is ptr,
-    // but we need to know what it points to. We can stash this in the field_index.
-    // Better: keep a separate field. For now, use imm_int to stash the alloc type kind.
-    // Actually the cleanest approach: inst type is ptr, but we save alloc_type info
-    // by making the first "operand" a dummy that carries the type.
-    // Simplest: just save it — we'll add alloc_type as a data field on Instruction if needed.
-    // For now, the consumer can track alloca types separately.
-    (void)alloc_type; // Type tracked by the generator's alloca map
+    inst->alloc_type = alloc_type;
     return inst;
 }
 

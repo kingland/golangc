@@ -681,3 +681,329 @@ func main() {
     EXPECT_FALSE(result.has_errors);
     EXPECT_TRUE(contains(result.asm_text, "setg al"));
 }
+
+// ============================================================================
+// Struct tests
+// ============================================================================
+
+TEST(CodegenTest, StructCompositeLiteral) {
+    auto result = compile_to_asm(R"(
+package main
+type Point struct {
+    X, Y int
+}
+func main() {
+    p := Point{1, 2}
+    _ = p
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Should contain field stores via GetPtr indirection
+    EXPECT_TRUE(contains(result.asm_text, "mov QWORD PTR [rcx], rax"));
+}
+
+TEST(CodegenTest, StructFieldAccess) {
+    auto result = compile_to_asm(R"(
+package main
+type Point struct {
+    X, Y int
+}
+func main() {
+    p := Point{10, 20}
+    println(p.X)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // GetPtr produces an address, Load dereferences it
+    EXPECT_TRUE(contains(result.asm_text, "mov rax, QWORD PTR [rcx]"));
+}
+
+TEST(CodegenTest, StructFieldWrite) {
+    auto result = compile_to_asm(R"(
+package main
+type Point struct {
+    X, Y int
+}
+func main() {
+    p := Point{1, 2}
+    println(p.Y)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "lea rax, [rbp"));
+}
+
+TEST(CodegenTest, StructMethod) {
+    auto result = compile_to_asm(R"(
+package main
+type Point struct {
+    X, Y int
+}
+func (p Point) Add(other Point) Point {
+    return Point{p.X + other.X, p.Y + other.Y}
+}
+func main() {
+    p1 := Point{1, 2}
+    p2 := Point{3, 4}
+    p3 := p1.Add(p2)
+    _ = p3
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Point$Add PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "Point$Add ENDP"));
+    EXPECT_TRUE(contains(result.asm_text, "call Point$Add"));
+}
+
+TEST(CodegenTest, StructSretReturn) {
+    auto result = compile_to_asm(R"(
+package main
+type Point struct {
+    X, Y int
+}
+func makePoint(x int, y int) Point {
+    return Point{x, y}
+}
+func main() {
+    p := makePoint(5, 10)
+    _ = p
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Sret: caller passes pointer to result area in RCX
+    EXPECT_TRUE(contains(result.asm_text, "lea rcx, [rbp"));
+    EXPECT_TRUE(contains(result.asm_text, "call makePoint"));
+}
+
+TEST(CodegenTest, StructPassByPointer) {
+    auto result = compile_to_asm(R"(
+package main
+type Pair struct {
+    A, B int
+}
+func sum(p Pair) int {
+    return p.A + p.B
+}
+func main() {
+    println(sum(Pair{3, 7}))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Struct arg >8 bytes passed by pointer (lea into register)
+    EXPECT_TRUE(contains(result.asm_text, "lea rcx, [rbp"));
+    EXPECT_TRUE(contains(result.asm_text, "call sum"));
+}
+
+TEST(CodegenTest, StructsGoFull) {
+    auto result = compile_to_asm(R"(
+package main
+type Point struct {
+    X, Y int
+}
+func (p Point) Add(other Point) Point {
+    return Point{p.X + other.X, p.Y + other.Y}
+}
+func main() {
+    p1 := Point{1, 2}
+    p2 := Point{3, 4}
+    p3 := p1.Add(p2)
+    println(p3.X, p3.Y)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Point$Add PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "call Point$Add"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_print_int"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_print_space"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_print_newline"));
+}
+
+// ============================================================================
+// Multi-arg println tests
+// ============================================================================
+
+TEST(CodegenTest, PrintlnMultiArg) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    println(1, 2)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_print_int"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_print_space"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_print_newline"));
+}
+
+TEST(CodegenTest, PrintlnSingleArg) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    println(42)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Single arg uses println_int (with newline built in)
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(CodegenTest, PrintlnNoArgs) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    println()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_print_newline"));
+}
+
+// ============================================================================
+// Interface tests
+// ============================================================================
+
+TEST(CodegenTest, InterfaceMake) {
+    auto result = compile_to_asm(R"(
+package main
+type Stringer interface {
+    String() string
+}
+type MyInt int
+func (m MyInt) String() string {
+    return "MyInt"
+}
+func Print(s Stringer) {
+    println(s.String())
+}
+func main() {
+    var x MyInt = 42
+    Print(x)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Interface boxing: iface_make in IR → type tag and data stored
+    EXPECT_TRUE(contains(result.asm_text, "call Print"));
+    EXPECT_TRUE(contains(result.asm_text, "MyInt$String PROC"));
+}
+
+TEST(CodegenTest, InterfaceMethodCall) {
+    auto result = compile_to_asm(R"(
+package main
+type Stringer interface {
+    String() string
+}
+type MyInt int
+func (m MyInt) String() string {
+    return "MyInt"
+}
+func Print(s Stringer) {
+    println(s.String())
+}
+func main() {
+    var x MyInt = 42
+    Print(x)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Interface method resolved to concrete: MyInt$String
+    EXPECT_TRUE(contains(result.asm_text, "call MyInt$String"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_string"));
+}
+
+TEST(CodegenTest, InterfacesGoFull) {
+    auto result = compile_to_asm(R"(
+package main
+type Stringer interface {
+    String() string
+}
+type MyInt int
+func (m MyInt) String() string {
+    return "MyInt"
+}
+func Print(s Stringer) {
+    println(s.String())
+}
+func main() {
+    var x MyInt = 42
+    Print(x)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Complete end-to-end: interface boxing, method dispatch, string return
+    EXPECT_TRUE(contains(result.asm_text, "MyInt$String PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "Print PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "main PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "call MyInt$String"));
+    EXPECT_TRUE(contains(result.asm_text, "call Print"));
+    EXPECT_TRUE(contains(result.asm_text, "_DATA SEGMENT"));
+}
+
+// ============================================================================
+// GetPtr indirection tests
+// ============================================================================
+
+TEST(CodegenTest, GetPtrLoadIndirection) {
+    auto result = compile_to_asm(R"(
+package main
+type S struct {
+    A, B int
+}
+func main() {
+    s := S{10, 20}
+    x := s.A
+    println(x)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // GetPtr creates address, Load dereferences through it
+    EXPECT_TRUE(contains(result.asm_text, "mov rax, QWORD PTR [rcx]"));
+}
+
+TEST(CodegenTest, GetPtrStoreIndirection) {
+    auto result = compile_to_asm(R"(
+package main
+type S struct {
+    A, B int
+}
+func main() {
+    s := S{0, 0}
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Store through GetPtr: store to [rcx]
+    EXPECT_TRUE(contains(result.asm_text, "mov QWORD PTR [rcx], rax"));
+}
+
+// ============================================================================
+// Type size tests
+// ============================================================================
+
+TEST(CodegenHelperTest, StructTypeSize) {
+    ir::IRType i64_t(ir::IRTypeKind::I64);
+
+    ir::IRType point_t(ir::IRTypeKind::Struct);
+    point_t.fields = {&i64_t, &i64_t};
+    EXPECT_EQ(X64CodeGenerator::type_size(&point_t), 16);
+    EXPECT_TRUE(X64CodeGenerator::is_large_struct(&point_t));
+    EXPECT_EQ(X64CodeGenerator::type_qwords(&point_t), 2);
+}
+
+TEST(CodegenHelperTest, SmallStructNotLarge) {
+    ir::IRType i64_t(ir::IRTypeKind::I64);
+
+    ir::IRType small_t(ir::IRTypeKind::Struct);
+    small_t.fields = {&i64_t};
+    EXPECT_EQ(X64CodeGenerator::type_size(&small_t), 8);
+    EXPECT_FALSE(X64CodeGenerator::is_large_struct(&small_t));
+}
+
+TEST(CodegenHelperTest, TypeQwords) {
+    ir::IRType i64_t(ir::IRTypeKind::I64);
+    EXPECT_EQ(X64CodeGenerator::type_qwords(&i64_t), 1);
+
+    ir::IRType ptr_t(ir::IRTypeKind::Ptr);
+    ir::IRType iface_t(ir::IRTypeKind::Struct);
+    iface_t.fields = {&ptr_t, &ptr_t};
+    EXPECT_EQ(X64CodeGenerator::type_qwords(&iface_t), 2);
+}
