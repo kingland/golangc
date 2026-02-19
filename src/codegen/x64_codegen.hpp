@@ -79,6 +79,15 @@ struct StringLiteral {
 };
 
 // ============================================================================
+// Float Literal Pool
+// ============================================================================
+
+struct FloatLiteral {
+    std::string label;
+    double value;
+};
+
+// ============================================================================
 // X64CodeGenerator — IR Module → MASM assembly text
 // ============================================================================
 
@@ -99,6 +108,12 @@ public:
     /// Check if an IR type is the string struct type {ptr, i64}.
     [[nodiscard]] static bool is_string_type(const ir::IRType* type);
 
+    /// Check if an IR type is a float type (F32 or F64).
+    [[nodiscard]] static bool is_float_type(const ir::IRType* type);
+
+    /// Check if an IR type is the slice struct type {ptr, i64, i64}.
+    [[nodiscard]] static bool is_slice_type(const ir::IRType* type);
+
     /// Compute the number of QWORDs needed to represent a type.
     [[nodiscard]] static int32_t type_qwords(const ir::IRType* type);
 
@@ -110,6 +125,9 @@ private:
     FrameLayout frame_;         // Current function's frame layout
     int string_counter_ = 0;   // Counter for string literal labels
     std::vector<StringLiteral> string_pool_; // String literals for .data section
+    int float_counter_ = 0;    // Counter for float literal labels
+    std::vector<FloatLiteral> float_pool_;   // Float literals for .data section
+    bool needs_sign_mask_ = false; // Whether __f64_sign_mask is needed
 
     // Maps IR Value IDs to stack slots (for temporaries, not just allocas)
     std::unordered_map<uint32_t, int32_t> temp_slots_;
@@ -157,6 +175,39 @@ private:
     void emit_interface_make(const ir::Instruction& inst);
     void emit_interface_data(const ir::Instruction& inst);
 
+    // Float operations
+    void emit_const_float(const ir::Instruction& inst);
+    void emit_float_arith(const ir::Instruction& inst);
+    void emit_float_neg(const ir::Instruction& inst);
+    void emit_float_compare(const ir::Instruction& inst);
+    void emit_sitofp(const ir::Instruction& inst);
+    void emit_fptosi(const ir::Instruction& inst);
+
+    // String operations
+    void emit_string_len(const ir::Instruction& inst);
+    void emit_string_index(const ir::Instruction& inst);
+    void emit_string_concat(const ir::Instruction& inst);
+
+    // Slice operations
+    void emit_slice_len(const ir::Instruction& inst);
+    void emit_slice_cap(const ir::Instruction& inst);
+    void emit_slice_index(const ir::Instruction& inst);
+
+    // Panic
+    void emit_panic(const ir::Instruction& inst);
+
+    // Conversions (float width)
+    void emit_fpext(const ir::Instruction& inst);
+    void emit_fptrunc(const ir::Instruction& inst);
+    void emit_bitcast(const ir::Instruction& inst);
+
+    // Aggregate operations
+    void emit_extract_value(const ir::Instruction& inst);
+    void emit_insert_value(const ir::Instruction& inst);
+
+    // Defer support
+    void emit_defer_call(const ir::Instruction& inst);
+
     // ---- Helpers ----
     /// Emit a line of assembly (indented with 4 spaces).
     void emit(std::string_view line);
@@ -176,6 +227,9 @@ private:
     /// Load an IR value into a specific register.
     void load_value_to_reg(const ir::Value* val, X64Reg reg);
 
+    /// Load a float value from a stack slot into an XMM register.
+    void load_value_to_xmm(const ir::Value* val, X64Reg xmm_reg);
+
     /// Get the address operand string for a value on the stack.
     [[nodiscard]] std::string stack_operand(uint32_t value_id) const;
 
@@ -191,6 +245,9 @@ private:
     /// Sret pointer slot offset (for functions returning large structs).
     int32_t sret_slot_ = 0;
     bool has_sret_ = false;
+
+    /// Deferred calls collected during function emission (replayed LIFO at ret).
+    std::vector<const ir::Instruction*> defers_;
 
     /// Get the MASM block label for a basic block within a function.
     [[nodiscard]] static std::string block_label(const ir::Function& func,

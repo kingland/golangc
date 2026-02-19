@@ -1,4 +1,4 @@
-# golangc - Go Compiler in C++
+# golangc - Go Compiler in C++ (Claude AI)
 
 A Go 1.21+ compiler implemented in modern C++23, targeting x86-64 Windows executables (PE format).
 

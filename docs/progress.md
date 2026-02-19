@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 7 (Structs, Methods & Interfaces Codegen) - Complete
-## Current Milestone: Phase 7 complete - structs, methods, interfaces, sret ABI, multi-arg println (62 codegen tests, structs.go + interfaces.go → working .exe files)
-## Completion Estimate: Phase 7 ~100%
+## Current Phase: 8 (Float, String Ops & Slice Basics) - Complete
+## Current Milestone: Phase 8 complete - float arithmetic/comparisons/conversions, string ops, slice ops, float ABI (84 codegen tests, floats.go → working .exe)
+## Completion Estimate: Phase 8 ~100%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -14,8 +14,8 @@
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 5 sample programs parse |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction |
 | IR | ✅ Complete | 71 | SSA-style IR with alloca-based locals, all 5 samples generate IR |
-| CodeGen | ✅ Complete | 62 | x86-64 MASM, structs/methods/interfaces, sret ABI, multi-arg println |
-| Runtime | ✅ Complete | - | println_*, print_*, print_space, print_newline, panic |
+| CodeGen | ✅ Complete | 84 | x86-64 MASM, structs/methods/interfaces, floats, string ops, slice ops |
+| Runtime | ✅ Complete | - | println/print_int/string/bool/float, string_concat, panic |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
@@ -495,5 +495,77 @@
 - Windows x64 ABI compliance for struct passing/return (sret convention)
 
 #### Next Steps
-- **Phase 8**: PE Linker (direct PE generation without ml64/link.exe dependency)
-- **Future**: Goroutine scheduler, GC, channels, slices, maps
+- **Phase 8**: Float, String, Slice codegen
+
+### Session 8 - Phase 8: Float, String Ops & Slice Basics
+#### Completed
+- **Float Infrastructure** (`x64_codegen.hpp`, `x64_codegen.cpp`):
+  - `FloatLiteral` struct and `float_pool_` for float constant data section
+  - `is_float_type()`, `is_slice_type()` static helpers
+  - `load_value_to_xmm()` helper — loads F64 from stack slot via `movsd`
+  - Float constants emitted as `DQ <hex>h` (raw 64-bit hex via memcpy, avoids MASM precision)
+  - `__f64_sign_mask DQ 8000000000000000h` emitted when float negation used
+  - EXTERN declarations for `golangc_println_float`, `golangc_print_float`, `golangc_string_concat`
+
+- **Float Arithmetic + Constants** (`x64_codegen_inst.cpp`):
+  - `emit_const_float`: register in pool, `movsd xmm0, [__fltN]`, store to temp slot
+  - `emit_float_arith`: `addsd`/`subsd`/`mulsd`/`divsd` with xmm0/xmm1 operands
+  - `emit_float_neg`: `xorpd xmm0, [__f64_sign_mask]`
+
+- **Float Comparisons + Conversions**:
+  - `emit_float_compare`: `ucomisd` + NaN-safe SETcc patterns (FEq, FNe use setnp/setp)
+  - `emit_sitofp`: `cvtsi2sd xmm0, rax`
+  - `emit_fptosi`: `cvttsd2si rax, xmm0`
+
+- **Float ABI (Windows x64)**:
+  - Prologue: float params saved from XMM0-XMM3 at positional slots
+  - `emit_ret`: float return via `movsd xmm0`
+  - `emit_call`: float args loaded to XMMn, float results saved via `movsd`
+  - `emit_println`: float detection dispatches to `golangc_print[ln]_float`
+
+- **String Operations**:
+  - `emit_string_len`: loads second QWORD (length field) from string struct
+  - `emit_string_index`: loads ptr + index, `movzx rax, BYTE PTR [rcx+rax]`
+  - `emit_string_concat`: calls `golangc_string_concat` with sret ({ptr,len} = 16 bytes)
+
+- **Slice Operations**:
+  - `emit_slice_len`: loads second QWORD from slice struct {ptr, len, cap}
+  - `emit_slice_cap`: loads third QWORD
+  - `emit_slice_index`: loads ptr + index*8, dereferences
+
+- **Runtime Library** (`src/runtime/runtime.hpp`, `src/runtime/runtime.cpp`):
+  - `golangc_println_float(double)` → `printf("%g\n")`
+  - `golangc_print_float(double)` → `printf("%g")`
+  - `golangc_string_concat(sret, ptr1, len1, ptr2, len2)` → malloc + memcpy + sret return
+
+- **Bug Fix**: `ir_gen_expr.cpp` type conversion crash
+  - `float64(x)` and `int(x)` caused null pointer dereference when `func_info` was null
+  - Fixed: use `func_sym->type` (always valid via scope lookup) instead of `func_info->symbol->type`
+
+- **22 new codegen tests** (62 → 84 total):
+  - Float: FloatConstant, FloatAdd, FloatSub, FloatMul, FloatDiv, FloatNeg (6)
+  - Float compare: FloatCompareLt, FloatCompareEq (2)
+  - Float conversion: IntToFloat, FloatToInt (2)
+  - Float ABI: PrintlnFloat, FloatFunctionParam, FloatReturn (3)
+  - Strings: StringLen, StringIndex, StringConcat (3)
+  - Slices: SliceLen (1)
+  - End-to-end: FloatsGoFull, StringOpsFull, FloatMultiArgPrintln (3)
+  - Helpers: IsFloatType, IsSliceType (2)
+
+- **End-to-end executables**:
+  - floats.exe: prints "5.14" and "6.28" (3.14+2.0, 3.14*2.0) ✅
+  - hello.exe: prints "Hello, World!" (regression) ✅
+  - fib.exe: prints "55" (regression) ✅
+  - structs.exe: prints "4 6" (regression) ✅
+  - interfaces.exe: prints "MyInt" (regression) ✅
+
+#### Current State
+- Float arithmetic, comparisons, conversions, and ABI fully functional
+- String len/index/concat codegen working
+- Slice len/cap/index codegen working
+- All 471 total tests pass (30 common + 89 lexer + 87 parser + 110 sema + 71 IR + 84 codegen)
+- Five milestone programs compile and run correctly as native Windows x64 executables
+
+#### Next Steps
+- **Phase 9**: PE Linker (direct PE generation without ml64/link.exe dependency)
+- **Future**: Goroutine scheduler, GC, channels, slices with make(), maps

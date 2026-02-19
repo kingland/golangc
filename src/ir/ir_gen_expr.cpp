@@ -351,7 +351,7 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
         if (call.args.count == 1) {
             auto* val = gen_expr(call.args[0]);
             if (!val) return builder_.create_const_int(type_map_.i64_type(), 0);
-            IRType* target_type = map_sema_type(func_info->symbol->type);
+            IRType* target_type = map_sema_type(func_sym->type);
             if (val->type == target_type) return val;
 
             bool src_float = val->type && val->type->is_float();

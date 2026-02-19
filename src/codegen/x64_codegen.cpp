@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstring>
 
 namespace golangc {
 namespace codegen {
@@ -99,6 +100,9 @@ std::string X64CodeGenerator::generate(const ir::Module& module) {
     out_.clear();
     string_pool_.clear();
     string_counter_ = 0;
+    float_pool_.clear();
+    float_counter_ = 0;
+    needs_sign_mask_ = false;
 
     emit_module_header(module);
 
@@ -119,6 +123,9 @@ std::string X64CodeGenerator::generate_function(const ir::Function& func) {
     out_.clear();
     string_pool_.clear();
     string_counter_ = 0;
+    float_pool_.clear();
+    float_counter_ = 0;
+    needs_sign_mask_ = false;
 
     emit_function(func);
 
@@ -139,16 +146,20 @@ void X64CodeGenerator::emit_module_header(const ir::Module& module) {
     out_ += "EXTERN golangc_print_space:PROC\n";
     out_ += "EXTERN golangc_print_newline:PROC\n";
     out_ += "EXTERN golangc_panic:PROC\n";
+    out_ += "EXTERN golangc_println_float:PROC\n";
+    out_ += "EXTERN golangc_print_float:PROC\n";
+    out_ += "EXTERN golangc_string_concat:PROC\n";
     emit_blank();
 }
 
 void X64CodeGenerator::emit_data_section() {
-    if (string_pool_.empty()) return;
+    if (string_pool_.empty() && float_pool_.empty() && !needs_sign_mask_) return;
 
     emit_blank();
     out_ += "_DATA SEGMENT\n";
+
+    // Emit string literals
     for (const auto& str : string_pool_) {
-        // Emit string bytes as DB directive
         out_ += fmt::format("{} DB ", str.label);
         for (size_t i = 0; i < str.data.size(); ++i) {
             if (i > 0) out_ += ", ";
@@ -161,6 +172,19 @@ void X64CodeGenerator::emit_data_section() {
         }
         out_ += "\n";
     }
+
+    // Emit float literals as raw 64-bit hex (avoids MASM precision issues)
+    for (const auto& flt : float_pool_) {
+        uint64_t bits = 0;
+        std::memcpy(&bits, &flt.value, sizeof(double));
+        out_ += fmt::format("ALIGN 8\n{} DQ {:016X}h\n", flt.label, bits);
+    }
+
+    // Emit sign mask for float negation
+    if (needs_sign_mask_) {
+        out_ += "ALIGN 8\n__f64_sign_mask DQ 8000000000000000h\n";
+    }
+
     out_ += "_DATA ENDS\n";
 }
 
@@ -232,14 +256,17 @@ void X64CodeGenerator::emit_prologue(const ir::Function& func) {
     }
 
     // Save parameters from registers to stack slots
+    // Windows x64: float params use XMM registers at positional slots
+    static constexpr X64Reg kXmmArgs[] = {X64Reg::XMM0, X64Reg::XMM1, X64Reg::XMM2, X64Reg::XMM3};
+
     for (size_t i = 0; i < func.params.size() && (i + reg_offset) < kMaxRegArgs; ++i) {
         auto param_id = func.params[i]->id;
         if (frame_.has_slot(param_id)) {
-            auto reg = kArgRegs[i + reg_offset];
             auto* param_type = func.params[i]->type;
 
             // For large struct params passed by pointer: copy from pointer into local alloca
             if (param_type && is_large_struct(param_type)) {
+                auto reg = kArgRegs[i + reg_offset];
                 int32_t nq = type_qwords(param_type);
                 auto param_off = frame_.offset_of(param_id);
                 emit(fmt::format("mov rcx, {}", reg_name(reg)));
@@ -247,7 +274,14 @@ void X64CodeGenerator::emit_prologue(const ir::Function& func) {
                     emit(fmt::format("mov rax, QWORD PTR [rcx+{}]", q * 8));
                     emit(fmt::format("mov QWORD PTR [rbp{}], rax", param_off + q * 8));
                 }
+            } else if (param_type && is_float_type(param_type)) {
+                // Float params come in XMM registers
+                auto xmm = kXmmArgs[i + reg_offset];
+                emit(fmt::format("movsd {}, {}",
+                                 stack_operand(param_id),
+                                 reg_name(xmm)));
             } else {
+                auto reg = kArgRegs[i + reg_offset];
                 emit(fmt::format("mov {}, {}",
                                  stack_operand(param_id),
                                  reg_name(reg)));
@@ -474,6 +508,18 @@ void X64CodeGenerator::load_value_to_reg(const ir::Value* val, X64Reg reg) {
     }
 }
 
+void X64CodeGenerator::load_value_to_xmm(const ir::Value* val, X64Reg xmm_reg) {
+    if (!val) return;
+    auto xmm = reg_name(xmm_reg);
+
+    // Load from stack slot via movsd
+    if (frame_.has_slot(val->id)) {
+        emit(fmt::format("movsd {}, QWORD PTR [rbp{}]", xmm, frame_.offset_of(val->id)));
+    } else if (temp_slots_.count(val->id)) {
+        emit(fmt::format("movsd {}, QWORD PTR [rbp{}]", xmm, temp_slots_[val->id]));
+    }
+}
+
 std::string X64CodeGenerator::stack_operand(uint32_t value_id) const {
     if (frame_.has_slot(value_id)) {
         return fmt::format("QWORD PTR [rbp{}]", frame_.offset_of(value_id));
@@ -542,6 +588,19 @@ int32_t X64CodeGenerator::type_qwords(const ir::IRType* type) {
 bool X64CodeGenerator::is_large_struct(const ir::IRType* type) {
     if (!type || type->kind != ir::IRTypeKind::Struct) return false;
     return type_size(type) > 8;
+}
+
+bool X64CodeGenerator::is_float_type(const ir::IRType* type) {
+    if (!type) return false;
+    return type->kind == ir::IRTypeKind::F32 || type->kind == ir::IRTypeKind::F64;
+}
+
+bool X64CodeGenerator::is_slice_type(const ir::IRType* type) {
+    if (!type || type->kind != ir::IRTypeKind::Struct) return false;
+    return type->fields.size() == 3 &&
+           type->fields[0]->kind == ir::IRTypeKind::Ptr &&
+           type->fields[1]->kind == ir::IRTypeKind::I64 &&
+           type->fields[2]->kind == ir::IRTypeKind::I64;
 }
 
 bool X64CodeGenerator::is_getptr(const ir::Value* val) {
