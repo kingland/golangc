@@ -1352,3 +1352,203 @@ func main() {
     EXPECT_TRUE(contains(result.asm_text, "call golangc_print_space"));
     EXPECT_TRUE(contains(result.asm_text, "call golangc_print_newline"));
 }
+
+// ============================================================================
+// Phase 9: Goroutine / Channel codegen tests
+// ============================================================================
+
+TEST(CodegenTest, ChanMakeEmitsCall) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int)
+    _ = ch
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_chan_make"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_chan_make:PROC"));
+}
+
+TEST(CodegenTest, ChanMakeElemSize8) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int)
+    _ = ch
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // chan int has 8-byte element size
+    EXPECT_TRUE(contains(result.asm_text, "mov rcx, 8"));
+}
+
+TEST(CodegenTest, ChanSendEmitsCall) {
+    auto result = compile_to_asm(R"(
+package main
+func f(ch chan int) {
+    ch <- 42
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_chan_send"));
+}
+
+TEST(CodegenTest, ChanSendPassesAddrRdx) {
+    auto result = compile_to_asm(R"(
+package main
+func f(ch chan int) {
+    ch <- 42
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "lea rdx, [rbp"));
+}
+
+TEST(CodegenTest, ChanRecvEmitsCall) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int)
+    x := <-ch
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_chan_recv"));
+}
+
+TEST(CodegenTest, ChanRecvOutputBuffer) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int)
+    x := <-ch
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Recv passes address of output buffer via RDX
+    EXPECT_TRUE(contains(result.asm_text, "lea rdx, [rbp"));
+}
+
+TEST(CodegenTest, ChanRecvWithPrintln) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int)
+    println(<-ch)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_chan_recv"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(CodegenTest, GoSpawnEmitsCall) {
+    auto result = compile_to_asm(R"(
+package main
+func worker(ch chan int) {
+    ch <- 42
+}
+func main() {
+    ch := make(chan int)
+    go worker(ch)
+    _ = <-ch
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_go_spawn"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_go_spawn:PROC"));
+}
+
+TEST(CodegenTest, GoSpawnFuncPtrLea) {
+    auto result = compile_to_asm(R"(
+package main
+func worker(ch chan int) {
+    ch <- 42
+}
+func main() {
+    ch := make(chan int)
+    go worker(ch)
+    _ = <-ch
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "lea rcx, [worker]"));
+}
+
+TEST(CodegenTest, GoSpawnArgCount1) {
+    auto result = compile_to_asm(R"(
+package main
+func worker(ch chan int) {
+    ch <- 42
+}
+func main() {
+    ch := make(chan int)
+    go worker(ch)
+    _ = <-ch
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "mov rdx, 1"));
+}
+
+TEST(CodegenTest, GoroutinesGoCompilesNoTodos) {
+    auto result = compile_to_asm(R"(
+package main
+func worker(ch chan int) {
+    ch <- 42
+}
+func main() {
+    ch := make(chan int)
+    go worker(ch)
+    println(<-ch)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_chan_make"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_chan_send"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_chan_recv"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_go_spawn"));
+    // No unimplemented opcodes should remain
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+TEST(CodegenTest, GoroutinesGoAllExterns) {
+    auto result = compile_to_asm(R"(
+package main
+func worker(ch chan int) {
+    ch <- 42
+}
+func main() {
+    ch := make(chan int)
+    go worker(ch)
+    println(<-ch)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_chan_make:PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_chan_send:PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_chan_recv:PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_go_spawn:PROC"));
+}
+
+TEST(CodegenTest, GoroutinesGoTwoProcs) {
+    auto result = compile_to_asm(R"(
+package main
+func worker(ch chan int) {
+    ch <- 42
+}
+func main() {
+    ch := make(chan int)
+    go worker(ch)
+    println(<-ch)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "worker PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "main PROC"));
+}

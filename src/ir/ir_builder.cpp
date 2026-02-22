@@ -388,12 +388,10 @@ Instruction* IRBuilder::create_defer_call(Value* callee, const std::vector<Value
     return inst;
 }
 
-Instruction* IRBuilder::create_chan_make(IRType* chan_type, Value* buf_size,
+Instruction* IRBuilder::create_chan_make(IRType* chan_type, int64_t elem_size,
                                          const std::string& name) {
     auto* inst = emit(Opcode::ChanMake, chan_type, name);
-    if (buf_size) {
-        inst->operands.push_back(buf_size);
-    }
+    inst->imm_int = elem_size;
     return inst;
 }
 
@@ -461,6 +459,13 @@ Instruction* IRBuilder::create_interface_type(Value* iface, const std::string& n
 // ============================================================================
 // Slice operations
 // ============================================================================
+
+Instruction* IRBuilder::create_slice_make(IRType* slice_type, Value* length, Value* capacity,
+                                           const std::string& name) {
+    auto* inst = emit(Opcode::SliceMake, slice_type, name);
+    inst->operands = {length, capacity};
+    return inst;
+}
 
 Instruction* IRBuilder::create_slice_len(Value* slice, const std::string& name) {
     return emit_unary(Opcode::SliceLen, slice, type_map_.i64_type(), name);

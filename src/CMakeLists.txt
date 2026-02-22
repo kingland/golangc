@@ -68,6 +68,7 @@ target_link_libraries(golangc_codegen PUBLIC golangc_ir golangc_common)
 # Runtime library (linked into generated executables)
 add_library(golangc_runtime STATIC
     runtime/runtime.cpp
+    runtime/goroutine_channel.cpp
 )
 target_include_directories(golangc_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 

@@ -549,7 +549,7 @@ TEST(IRBuilderTest, GoSpecific) {
     auto* bb = func.create_block("entry");
     builder.set_insert_block(bb);
 
-    auto* ch = builder.create_chan_make(tm.ptr_type(), nullptr, "ch");
+    auto* ch = builder.create_chan_make(tm.ptr_type(), 8, "ch");
     EXPECT_EQ(ch->opcode, Opcode::ChanMake);
 
     auto* val = builder.create_const_int(tm.i64_type(), 42);

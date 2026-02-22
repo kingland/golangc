@@ -90,6 +90,13 @@ void X64CodeGenerator::emit_instruction(const ir::Instruction& inst,
         // Defer
         case ir::Opcode::DeferCall: emit_defer_call(inst); break;
 
+        // Goroutine / Channel operations
+        case ir::Opcode::ChanMake:  emit_chan_make(inst);  break;
+        case ir::Opcode::ChanSend:  emit_chan_send(inst);  break;
+        case ir::Opcode::ChanRecv:  emit_chan_recv(inst);  break;
+        case ir::Opcode::GoSpawn:   emit_go_spawn(inst);   break;
+        case ir::Opcode::SliceMake: emit_slice_make(inst); break;
+
         // Float operations
         case ir::Opcode::ConstFloat: emit_const_float(inst); break;
         case ir::Opcode::FAdd:
@@ -1228,6 +1235,134 @@ void X64CodeGenerator::emit_insert_value(const ir::Instruction& inst) {
 void X64CodeGenerator::emit_defer_call(const ir::Instruction& inst) {
     // Record the defer instruction for replay at each return site
     defers_.push_back(&inst);
+}
+
+// ============================================================================
+// Channel / Goroutine operations
+// ============================================================================
+
+// emit_chan_make: call golangc_chan_make(elem_size) → ptr in temp slot
+void X64CodeGenerator::emit_chan_make(const ir::Instruction& inst) {
+    auto slot = get_temp_slot(inst.id);
+    emit(fmt::format("mov rcx, {}", inst.imm_int));
+    emit("sub rsp, 32");
+    emit("call golangc_chan_make");
+    emit("add rsp, 32");
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+}
+
+// emit_chan_send: call golangc_chan_send(ch, &val_slot)
+// operands[0] = channel ptr, operands[1] = value to send
+void X64CodeGenerator::emit_chan_send(const ir::Instruction& inst) {
+    // If the value is a constant, spill it to its temp slot first
+    const ir::Value* val = inst.operands[1];
+    const ir::Instruction* val_inst = dynamic_cast<const ir::Instruction*>(val);
+    if (val_inst &&
+        (val_inst->opcode == ir::Opcode::ConstInt || val_inst->opcode == ir::Opcode::ConstBool)) {
+        // Ensure the slot exists and the constant is stored
+        if (!temp_slots_.count(val->id)) {
+            int32_t s = frame_.allocate(val->id, 8);
+            temp_slots_[val->id] = s;
+        }
+        int32_t vslot = temp_slots_[val->id];
+        if (val_inst->opcode == ir::Opcode::ConstInt) {
+            emit(fmt::format("mov rax, {}", val_inst->imm_int));
+        } else {
+            emit(fmt::format("mov rax, {}", val_inst->imm_int ? 1 : 0));
+        }
+        emit(fmt::format("mov QWORD PTR [rbp{}], rax", vslot));
+    }
+
+    // Load channel pointer into RCX
+    load_value_to_reg(inst.operands[0], X64Reg::RCX);
+
+    // Address of value slot into RDX
+    int32_t val_slot = 0;
+    if (temp_slots_.count(val->id)) {
+        val_slot = temp_slots_[val->id];
+    } else if (frame_.has_slot(val->id)) {
+        val_slot = frame_.offset_of(val->id);
+    }
+    emit(fmt::format("lea rdx, [rbp{}]", val_slot));
+
+    emit("sub rsp, 32");
+    emit("call golangc_chan_send");
+    emit("add rsp, 32");
+}
+
+// emit_chan_recv: call golangc_chan_recv(ch, &out_slot) — result in out_slot
+void X64CodeGenerator::emit_chan_recv(const ir::Instruction& inst) {
+    auto out_slot = get_temp_slot(inst.id);
+
+    // Load channel pointer into RCX
+    load_value_to_reg(inst.operands[0], X64Reg::RCX);
+
+    // Address of output slot into RDX
+    emit(fmt::format("lea rdx, [rbp{}]", out_slot));
+
+    emit("sub rsp, 32");
+    emit("call golangc_chan_recv");
+    emit("add rsp, 32");
+    // Result was written directly into [rbp+out_slot] by the runtime
+}
+
+// emit_go_spawn: call golangc_go_spawn(func_ptr, arg_count, args...)
+// operands[0] = callee function, operands[1..] = args
+void X64CodeGenerator::emit_go_spawn(const ir::Instruction& inst) {
+    // operands[0] is the function to spawn
+    const ir::Value* callee_val = inst.operands[0];
+    int64_t num_args = static_cast<int64_t>(inst.operands.size()) - 1;
+
+    // RCX = address of callee function
+    // load_value_to_reg already handles Function* via dynamic_cast → lea
+    load_value_to_reg(callee_val, X64Reg::RCX);
+
+    // RDX = arg_count
+    emit(fmt::format("mov rdx, {}", num_args));
+
+    // R8 = args[0], R9 = args[1] (if present)
+    static constexpr X64Reg extra_regs[] = {X64Reg::R8, X64Reg::R9};
+    int64_t reg_args = num_args < 2 ? num_args : 2;
+    for (int64_t i = 0; i < reg_args; ++i) {
+        load_value_to_reg(inst.operands[static_cast<size_t>(1 + i)], extra_regs[i]);
+    }
+
+    emit("sub rsp, 32");
+    emit("call golangc_go_spawn");
+    emit("add rsp, 32");
+}
+
+// emit_slice_make: malloc(len*elem_size) → {ptr, len, cap} in 3 temp slots
+// operands[0] = length, operands[1] = capacity
+void X64CodeGenerator::emit_slice_make(const ir::Instruction& inst) {
+    // Allocate 3 temp slots for {ptr, len, cap}
+    auto ptr_slot = get_temp_slot(inst.id);
+    // len and cap use the pre-allocated alias slots
+    int32_t len_slot = 0, cap_slot = 0;
+    {
+        auto it = temp_slots_.find(inst.id + 100000);
+        len_slot = (it != temp_slots_.end()) ? it->second : ptr_slot + 8;
+    }
+    {
+        auto it = temp_slots_.find(inst.id + 200000);
+        cap_slot = (it != temp_slots_.end()) ? it->second : ptr_slot + 16;
+    }
+
+    // Load length into RCX, multiply by 8 to get byte count for malloc
+    load_value_to_reg(inst.operands[0], X64Reg::RCX);
+    emit("imul rcx, 8");
+    emit("sub rsp, 32");
+    emit("call malloc");
+    emit("add rsp, 32");
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", ptr_slot));
+
+    // Store len
+    load_value_to_reg(inst.operands[0], X64Reg::RAX);
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", len_slot));
+
+    // Store cap
+    load_value_to_reg(inst.operands[1], X64Reg::RAX);
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", cap_slot));
 }
 
 } // namespace codegen

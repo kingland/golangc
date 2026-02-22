@@ -149,6 +149,11 @@ void X64CodeGenerator::emit_module_header(const ir::Module& module) {
     out_ += "EXTERN golangc_println_float:PROC\n";
     out_ += "EXTERN golangc_print_float:PROC\n";
     out_ += "EXTERN golangc_string_concat:PROC\n";
+    out_ += "EXTERN golangc_chan_make:PROC\n";
+    out_ += "EXTERN golangc_chan_send:PROC\n";
+    out_ += "EXTERN golangc_chan_recv:PROC\n";
+    out_ += "EXTERN golangc_go_spawn:PROC\n";
+    out_ += "EXTERN malloc:PROC\n";
     emit_blank();
 }
 

@@ -105,7 +105,7 @@ public:
     // ---- Go-specific ----
     Instruction* create_go_spawn(Value* callee, const std::vector<Value*>& args);
     Instruction* create_defer_call(Value* callee, const std::vector<Value*>& args);
-    Instruction* create_chan_make(IRType* chan_type, Value* buf_size = nullptr,
+    Instruction* create_chan_make(IRType* chan_type, int64_t elem_size = 8,
                                  const std::string& name = "");
     Instruction* create_chan_send(Value* ch, Value* val);
     Instruction* create_chan_recv(Value* ch, IRType* result_type, const std::string& name = "");
@@ -123,6 +123,8 @@ public:
     Instruction* create_interface_type(Value* iface, const std::string& name = "");
 
     // ---- Slice operations ----
+    Instruction* create_slice_make(IRType* slice_type, Value* length, Value* capacity,
+                                   const std::string& name = "");
     Instruction* create_slice_len(Value* slice, const std::string& name = "");
     Instruction* create_slice_cap(Value* slice, const std::string& name = "");
     Instruction* create_slice_index(Value* slice, Value* index, IRType* elem_type,

@@ -46,4 +46,20 @@ void golangc_string_concat(char* sret_out,
 /// Panic with a message and exit.
 [[noreturn]] void golangc_panic(const char* msg);
 
+// ---- Goroutine / Channel runtime ----
+
+struct golangc_chan;
+
+/// Create an unbuffered channel with the given element size in bytes.
+golangc_chan* golangc_chan_make(int64_t elem_size);
+
+/// Send val_ptr to ch (blocks until receiver consumes).
+void golangc_chan_send(golangc_chan* ch, void* val_ptr);
+
+/// Receive from ch into out_ptr (blocks until sender delivers).
+void golangc_chan_recv(golangc_chan* ch, void* out_ptr);
+
+/// Spawn a goroutine: func_ptr called with arg_count variadic int64_t args.
+void golangc_go_spawn(void* func_ptr, int64_t arg_count, ...);
+
 } // extern "C"

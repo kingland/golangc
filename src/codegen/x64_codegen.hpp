@@ -208,6 +208,13 @@ private:
     // Defer support
     void emit_defer_call(const ir::Instruction& inst);
 
+    // Goroutine / Channel operations
+    void emit_chan_make(const ir::Instruction& inst);
+    void emit_chan_send(const ir::Instruction& inst);
+    void emit_chan_recv(const ir::Instruction& inst);
+    void emit_go_spawn(const ir::Instruction& inst);
+    void emit_slice_make(const ir::Instruction& inst);
+
     // ---- Helpers ----
     /// Emit a line of assembly (indented with 4 spaces).
     void emit(std::string_view line);

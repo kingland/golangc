@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 8 (Float, String Ops & Slice Basics) - Complete
-## Current Milestone: Phase 8 complete - float arithmetic/comparisons/conversions, string ops, slice ops, float ABI (84 codegen tests, floats.go → working .exe)
-## Completion Estimate: Phase 8 ~100%
+## Current Phase: 9 (Goroutines & Channels) - Complete
+## Current Milestone: Phase 9 complete - goroutine spawning via CreateThread, unbuffered channel rendezvous via semaphores, goroutines.go → working .exe printing 42 (97 codegen tests)
+## Completion Estimate: Phase 9 ~100%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -14,8 +14,8 @@
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 5 sample programs parse |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction |
 | IR | ✅ Complete | 71 | SSA-style IR with alloca-based locals, all 5 samples generate IR |
-| CodeGen | ✅ Complete | 84 | x86-64 MASM, structs/methods/interfaces, floats, string ops, slice ops |
-| Runtime | ✅ Complete | - | println/print_int/string/bool/float, string_concat, panic |
+| CodeGen | ✅ Complete | 97 | x86-64 MASM, structs/methods/interfaces, floats, string ops, slices, goroutines, channels |
+| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel (chan_make/send/recv, go_spawn) |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
@@ -566,6 +566,40 @@
 - All 471 total tests pass (30 common + 89 lexer + 87 parser + 110 sema + 71 IR + 84 codegen)
 - Five milestone programs compile and run correctly as native Windows x64 executables
 
+#### Next Steps (superseded by Session 9)
+- Phase 9: Goroutines & Channels
+
+---
+
+### Session 9 - Phase 9: Goroutines & Channels (2026-02-22)
+#### Completed
+- **New file**: `src/runtime/goroutine_channel.cpp`
+  - `golangc_chan_make(int64_t elem_size)` — malloc + CRITICAL_SECTION + 2 semaphores (initial count 0)
+  - `golangc_chan_send(ch, val_ptr)` — sets data_ptr under lock, signals sender_ready, waits recv_ready
+  - `golangc_chan_recv(ch, out_ptr)` — waits sender_ready, memcpy under lock, signals recv_ready
+  - `golangc_go_spawn(func_ptr, arg_count, ...)` — heap-allocates GoroutineLaunch, CreateThread fire-and-forget
+- **`src/runtime/runtime.hpp`**: Added `golangc_chan` forward decl + 4 extern "C" declarations
+- **`src/CMakeLists.txt`**: Added `goroutine_channel.cpp` to `golangc_runtime` sources
+- **`src/ir/ir_builder.hpp`**: Changed `create_chan_make` signature from `Value* buf_size` to `int64_t elem_size = 8`; added `create_slice_make`
+- **`src/ir/ir_builder.cpp`**: Fixed `create_chan_make` to store `imm_int = elem_size`; added `create_slice_make` emitting `SliceMake` with `{length, capacity}` operands
+- **`src/ir/ir_gen_expr.cpp`**: Fixed `make()` builtin for Chan (passes static elem_size); added Slice case
+- **`src/codegen/x64_codegen.hpp`**: Added 5 private emit_ declarations
+- **`src/codegen/x64_codegen.cpp`**: Added 5 EXTERN lines to `emit_module_header`
+- **`src/codegen/x64_codegen_inst.cpp`**: Added 5 dispatch cases + full implementations:
+  - `emit_chan_make`: `mov rcx, <elem_size>` → call → store RAX
+  - `emit_chan_send`: spill constants if needed, load ch→RCX, lea &val→RDX, call
+  - `emit_chan_recv`: get_temp_slot for output, load ch→RCX, lea &out→RDX, call
+  - `emit_go_spawn`: load_value_to_reg(callee)→RCX, mov rdx=argc, R8/R9=args, call
+  - `emit_slice_make`: malloc(len*8), store ptr/len/cap to 3 alias slots
+- **`tests/ir/test_ir.cpp`**: Fixed `create_chan_make(nullptr→8)` call
+- **`tests/codegen/test_codegen.cpp`**: Added 13 new tests (84→97 codegen tests)
+
+#### Current State
+- Goroutines and unbuffered channels fully functional via Windows CreateThread + semaphores
+- goroutines.go compiles to a working .exe printing `42`
+- All 5 milestone programs pass regression: hello, fibonacci, structs, interfaces, goroutines
+- All 484 total tests pass (30+89+87+110+71+97)
+
 #### Next Steps
-- **Phase 9**: PE Linker (direct PE generation without ml64/link.exe dependency)
-- **Future**: Goroutine scheduler, GC, channels, slices with make(), maps
+- **Phase 10**: Direct PE generation (remove ml64/link.exe dependency)
+- **Future**: Buffered channels, goroutine scheduler, GC, maps with make()

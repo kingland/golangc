@@ -642,10 +642,33 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
     if (builtin_name == "make") {
         if (call_info && call_info->type) {
             auto* t = sema::underlying(call_info->type);
-            if (t->kind == sema::TypeKind::Chan)
-                return builder_.create_chan_make(type_map_.ptr_type(), nullptr, "make");
+            if (t->kind == sema::TypeKind::Chan) {
+                // Compute element size statically
+                int64_t elem_size = 8;
+                if (t->chan.element) {
+                    auto* elem_ir = map_sema_type(t->chan.element);
+                    if (elem_ir) {
+                        switch (elem_ir->kind) {
+                            case ir::IRTypeKind::I8:  elem_size = 1; break;
+                            case ir::IRTypeKind::I16: elem_size = 2; break;
+                            case ir::IRTypeKind::I32: elem_size = 4; break;
+                            default:                  elem_size = 8; break;
+                        }
+                    }
+                }
+                return builder_.create_chan_make(type_map_.ptr_type(), elem_size, "make");
+            }
             if (t->kind == sema::TypeKind::Map)
                 return builder_.create_map_make(type_map_.ptr_type(), "make");
+            if (t->kind == sema::TypeKind::Slice) {
+                Value* len_val = (call.args.count >= 2)
+                    ? gen_expr(call.args[1])
+                    : builder_.create_const_int(type_map_.i64_type(), 0);
+                Value* cap_val = (call.args.count >= 3)
+                    ? gen_expr(call.args[2])
+                    : len_val;
+                return builder_.create_slice_make(type_map_.slice_type(), len_val, cap_val, "make");
+            }
         }
         return builder_.create_const_nil(type_map_.ptr_type(), "make");
     }
