@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 9 (Goroutines & Channels) - Complete
-## Current Milestone: Phase 9 complete - goroutine spawning via CreateThread, unbuffered channel rendezvous via semaphores, goroutines.go → working .exe printing 42 (97 codegen tests)
-## Completion Estimate: Phase 9 ~100%
+## Current Phase: 10 (Maps + Multiple Return Values) - Complete
+## Current Milestone: Phase 10 complete - map runtime (FNV-1a hash table, string-aware keys), multiple return values (tuple packing/unpacking via InsertValue/ExtractValue), for-range value binding, maps.go + multireturn.go → working .exes (109 codegen tests)
+## Completion Estimate: Phase 10 ~100%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -11,11 +11,11 @@
 | Common Utils | ✅ Complete | 30 | source_location, diagnostic, string_interner, arena_allocator, result |
 | Lexer | ✅ Complete | 89 | All Go tokens, literals, operators, comments, auto-semicolons |
 | AST | ✅ Complete | - | Full node hierarchy (16 expr, 21 stmt, 7 decl, 13 type kinds) |
-| Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 5 sample programs parse |
+| Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction |
-| IR | ✅ Complete | 71 | SSA-style IR with alloca-based locals, all 5 samples generate IR |
-| CodeGen | ✅ Complete | 97 | x86-64 MASM, structs/methods/interfaces, floats, string ops, slices, goroutines, channels |
-| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel (chan_make/send/recv, go_spawn) |
+| IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make |
+| CodeGen | ✅ Complete | 109 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices, goroutines, channels, maps, multi-return |
+| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware) |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
@@ -600,6 +600,39 @@
 - All 5 milestone programs pass regression: hello, fibonacci, structs, interfaces, goroutines
 - All 484 total tests pass (30+89+87+110+71+97)
 
+#### Next Steps (superseded by Session 10)
+- Phase 10: Maps + Multiple Return Values
+
+---
+
+### Session 10 - Phase 10: Maps + Multiple Return Values (2026-02-23)
+#### Completed
+- **Runtime (`runtime.cpp`)**: Added `golangc_map` struct (open-addressing FNV-1a hash table, initial capacity 16, 75% load resize), `golangc_map_make(key_size, val_size)`, `golangc_map_get(m, key_ptr, out_ok)`, `golangc_map_set(m, key_ptr, val_ptr)`. String keys (key_size==16) use content-based hashing and comparison via `hash_key`/`keys_equal` helpers.
+- **`runtime.hpp`**: Added `golangc_map` forward decl + 3 `extern "C"` declarations
+- **`ir_builder.hpp/cpp`**: Updated `create_map_make` to carry `key_size` in `imm_int` and `val_size` in `field_index`; added `make_tuple_type` to `IRTypeMap`
+- **`ir_type_map.hpp/cpp`**: Added `make_tuple_type(fields)` and static `type_size(IRType*)` helper
+- **`ir_gen_expr.cpp`**: Fixed `make(map[K]V)` to compute key/val sizes from sema types via `IRTypeMap::type_size`
+- **`ir_gen_stmt.cpp`**:
+  - `gen_assign`: detect map-index LHS (`m[k] = v`) and emit `MapSet`
+  - `gen_return`: pack multiple return values into a struct via `InsertValue` sequence
+  - `gen_short_var_decl`: unpack multi-return call via `ExtractValue`; handle `v, ok := m[k]`
+  - `gen_range`: actually load and bind element value for slices/arrays/strings
+- **`ir_gen_decl.cpp`**: Fixed `register_functions` to call `make_tuple_type` for multi-result functions
+- **`x64_codegen.hpp/cpp/inst.cpp`**: 3 new emit functions + 3 EXTERN lines + `prescan_temps` allocates ok-slot for `MapGet` (id+300000)
+- **`emit_map_make`**: `mov rcx, key_size` / `mov rdx, val_size` → `call golangc_map_make`
+- **`emit_map_get`**: lea key addr→RDX, lea ok addr→R8, call, null-check → deref or store 0
+- **`emit_map_set`**: spill constants if needed, lea key→RDX, lea val→R8, call
+- **New samples**: `samples/maps.go` (string key map → prints 42, 99), `samples/multireturn.go` (divmod → prints 3, 2)
+- **12 new codegen tests** (97→109)
+
+#### Current State
+- Maps with `int` and `string` keys fully functional
+- Multiple return values pack/unpack via sret struct machinery (reuses existing struct ABI)
+- For-range now loads actual element values for slices, arrays, strings
+- `v, ok := m[k]` syntax supported
+- All 7 milestone programs compile and run correctly
+- All 496 total tests pass (30+89+87+110+71+109)
+
 #### Next Steps
-- **Phase 10**: Direct PE generation (remove ml64/link.exe dependency)
-- **Future**: Buffered channels, goroutine scheduler, GC, maps with make()
+- **Phase 11**: Append + slice element write, for-range over strings/slices with value use
+- **Future**: Direct PE generation, buffered channels, GC, closures

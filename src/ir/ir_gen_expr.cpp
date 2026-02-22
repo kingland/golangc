@@ -1,4 +1,5 @@
 #include "ir/ir_gen.hpp"
+#include "ir/ir_type_map.hpp"
 
 #include <cassert>
 #include <charconv>
@@ -658,8 +659,12 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
                 }
                 return builder_.create_chan_make(type_map_.ptr_type(), elem_size, "make");
             }
-            if (t->kind == sema::TypeKind::Map)
-                return builder_.create_map_make(type_map_.ptr_type(), "make");
+            if (t->kind == sema::TypeKind::Map) {
+                int64_t key_sz = 8, val_sz = 8;
+                if (t->map.key)   key_sz = IRTypeMap::type_size(map_sema_type(t->map.key));
+                if (t->map.value) val_sz = IRTypeMap::type_size(map_sema_type(t->map.value));
+                return builder_.create_map_make(type_map_.ptr_type(), key_sz, val_sz, "make");
+            }
             if (t->kind == sema::TypeKind::Slice) {
                 Value* len_val = (call.args.count >= 2)
                     ? gen_expr(call.args[1])

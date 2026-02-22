@@ -504,8 +504,12 @@ Instruction* IRBuilder::create_string_concat(Value* a, Value* b, const std::stri
 // Map operations
 // ============================================================================
 
-Instruction* IRBuilder::create_map_make(IRType* map_type, const std::string& name) {
-    return emit(Opcode::MapMake, map_type, name);
+Instruction* IRBuilder::create_map_make(IRType* map_type, int64_t key_size, int64_t val_size,
+                                         const std::string& name) {
+    auto* inst = emit(Opcode::MapMake, map_type, name);
+    inst->imm_int = key_size;
+    inst->field_index = static_cast<uint32_t>(val_size); // reuse field_index for val_size
+    return inst;
 }
 
 Instruction* IRBuilder::create_map_get(Value* m, Value* key, IRType* val_type,

@@ -46,6 +46,20 @@ void golangc_string_concat(char* sret_out,
 /// Panic with a message and exit.
 [[noreturn]] void golangc_panic(const char* msg);
 
+// ---- Map runtime ----
+
+struct golangc_map;
+
+/// Create a hash map with given key and value sizes in bytes.
+golangc_map* golangc_map_make(int64_t key_size, int64_t val_size);
+
+/// Look up a key. Returns pointer to value slot (or nullptr if absent).
+/// Writes 1/0 to *out_ok (out_ok may be nullptr).
+void* golangc_map_get(golangc_map* m, void* key_ptr, int64_t* out_ok);
+
+/// Insert or update key → value.
+void golangc_map_set(golangc_map* m, void* key_ptr, void* val_ptr);
+
 // ---- Goroutine / Channel runtime ----
 
 struct golangc_chan;

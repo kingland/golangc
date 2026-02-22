@@ -96,11 +96,12 @@ void IRGenerator::register_functions(ast::File* file) {
             if (sema_func_type->func->results.size() == 1) {
                 func->return_type = map_sema_type(sema_func_type->func->results[0].type);
             } else if (sema_func_type->func->results.size() > 1) {
+                // Build an anonymous struct type for the tuple of return values
                 std::vector<IRType*> ret_fields;
                 for (const auto& r : sema_func_type->func->results) {
                     ret_fields.push_back(map_sema_type(r.type));
                 }
-                func->return_type = map_sema_type(sema_func_type);
+                func->return_type = type_map_.make_tuple_type(std::move(ret_fields));
             } else {
                 func->return_type = type_map_.void_type();
             }

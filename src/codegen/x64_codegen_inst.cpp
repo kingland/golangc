@@ -97,6 +97,11 @@ void X64CodeGenerator::emit_instruction(const ir::Instruction& inst,
         case ir::Opcode::GoSpawn:   emit_go_spawn(inst);   break;
         case ir::Opcode::SliceMake: emit_slice_make(inst); break;
 
+        // Map operations
+        case ir::Opcode::MapMake: emit_map_make(inst); break;
+        case ir::Opcode::MapGet:  emit_map_get(inst);  break;
+        case ir::Opcode::MapSet:  emit_map_set(inst);  break;
+
         // Float operations
         case ir::Opcode::ConstFloat: emit_const_float(inst); break;
         case ir::Opcode::FAdd:
@@ -1363,6 +1368,123 @@ void X64CodeGenerator::emit_slice_make(const ir::Instruction& inst) {
     // Store cap
     load_value_to_reg(inst.operands[1], X64Reg::RAX);
     emit(fmt::format("mov QWORD PTR [rbp{}], rax", cap_slot));
+}
+
+// ============================================================================
+// Map operations
+// ============================================================================
+
+// emit_map_make: call golangc_map_make(key_size, val_size) → ptr
+void X64CodeGenerator::emit_map_make(const ir::Instruction& inst) {
+    auto slot = get_temp_slot(inst.id);
+    emit(fmt::format("mov rcx, {}", inst.imm_int));                      // key_size
+    emit(fmt::format("mov rdx, {}", static_cast<int64_t>(inst.field_index))); // val_size
+    emit("sub rsp, 32");
+    emit("call golangc_map_make");
+    emit("add rsp, 32");
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+}
+
+// emit_map_get: call golangc_map_get(m, &key_slot, &ok_slot) → RAX = ptr to value
+// Then deref RAX → result slot (skip if RAX==0)
+void X64CodeGenerator::emit_map_get(const ir::Instruction& inst) {
+    auto result_slot = get_temp_slot(inst.id);
+    // ok slot pre-allocated by prescan_temps (inst.id + 300000)
+    uint32_t ok_id = inst.id + 300000;
+    int32_t ok_slot = temp_slots_.count(ok_id) ? temp_slots_[ok_id] : result_slot;
+
+    // Load map pointer → RCX
+    load_value_to_reg(inst.operands[0], X64Reg::RCX);
+
+    // Spill key to its slot if it's a constant
+    const ir::Value* key_val = inst.operands[1];
+    const ir::Instruction* key_inst = dynamic_cast<const ir::Instruction*>(key_val);
+    if (key_inst &&
+        (key_inst->opcode == ir::Opcode::ConstInt || key_inst->opcode == ir::Opcode::ConstBool)) {
+        if (!temp_slots_.count(key_val->id)) {
+            int32_t s = frame_.allocate(key_val->id, 8);
+            temp_slots_[key_val->id] = s;
+        }
+        emit(fmt::format("mov rax, {}", key_inst->imm_int));
+        emit(fmt::format("mov QWORD PTR [rbp{}], rax", temp_slots_[key_val->id]));
+    }
+
+    // &key_slot → RDX
+    int32_t key_slot = 0;
+    if (temp_slots_.count(key_val->id))    key_slot = temp_slots_[key_val->id];
+    else if (frame_.has_slot(key_val->id)) key_slot = frame_.offset_of(key_val->id);
+    emit(fmt::format("lea rdx, [rbp{}]", key_slot));
+
+    // &ok_slot → R8
+    emit(fmt::format("lea r8, [rbp{}]", ok_slot));
+
+    emit("sub rsp, 32");
+    emit("call golangc_map_get");
+    emit("add rsp, 32");
+
+    // RAX = pointer to value (or null). If non-null, dereference into result slot.
+    std::string func_prefix = current_func_ ? masm_name(current_func_->name) : "map";
+    std::string miss_lbl = fmt::format("{}$mg_miss{}", func_prefix, inst.id);
+    std::string done_lbl = fmt::format("{}$mg_done{}", func_prefix, inst.id);
+
+    emit("test rax, rax");
+    emit(fmt::format("jz {}", miss_lbl));
+    // Dereference: for 8-byte values just mov rax, [rax]
+    emit("mov rax, QWORD PTR [rax]");
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", result_slot));
+    emit(fmt::format("jmp {}", done_lbl));
+    emit_label(miss_lbl);
+    emit(fmt::format("mov QWORD PTR [rbp{}], 0", result_slot));
+    emit_label(done_lbl);
+}
+
+// emit_map_set: call golangc_map_set(m, &key_slot, &val_slot)
+void X64CodeGenerator::emit_map_set(const ir::Instruction& inst) {
+    // operands: [map, key, val]
+    // Load map pointer → RCX
+    load_value_to_reg(inst.operands[0], X64Reg::RCX);
+
+    // Ensure key is spilled to a slot
+    const ir::Value* key_val = inst.operands[1];
+    const ir::Instruction* key_inst = dynamic_cast<const ir::Instruction*>(key_val);
+    if (key_inst &&
+        (key_inst->opcode == ir::Opcode::ConstInt || key_inst->opcode == ir::Opcode::ConstBool)) {
+        if (!temp_slots_.count(key_val->id)) {
+            int32_t s = frame_.allocate(key_val->id, 8);
+            temp_slots_[key_val->id] = s;
+        }
+        emit(fmt::format("mov rax, {}", key_inst->imm_int));
+        emit(fmt::format("mov QWORD PTR [rbp{}], rax", temp_slots_[key_val->id]));
+    }
+
+    // Ensure val is spilled to a slot
+    const ir::Value* val_v = inst.operands[2];
+    const ir::Instruction* val_inst = dynamic_cast<const ir::Instruction*>(val_v);
+    if (val_inst &&
+        (val_inst->opcode == ir::Opcode::ConstInt || val_inst->opcode == ir::Opcode::ConstBool)) {
+        if (!temp_slots_.count(val_v->id)) {
+            int32_t s = frame_.allocate(val_v->id, 8);
+            temp_slots_[val_v->id] = s;
+        }
+        emit(fmt::format("mov rax, {}", val_inst->imm_int));
+        emit(fmt::format("mov QWORD PTR [rbp{}], rax", temp_slots_[val_v->id]));
+    }
+
+    // &key_slot → RDX
+    int32_t key_slot = 0;
+    if (temp_slots_.count(key_val->id))    key_slot = temp_slots_[key_val->id];
+    else if (frame_.has_slot(key_val->id)) key_slot = frame_.offset_of(key_val->id);
+    emit(fmt::format("lea rdx, [rbp{}]", key_slot));
+
+    // &val_slot → R8
+    int32_t val_slot = 0;
+    if (temp_slots_.count(val_v->id))    val_slot = temp_slots_[val_v->id];
+    else if (frame_.has_slot(val_v->id)) val_slot = frame_.offset_of(val_v->id);
+    emit(fmt::format("lea r8, [rbp{}]", val_slot));
+
+    emit("sub rsp, 32");
+    emit("call golangc_map_set");
+    emit("add rsp, 32");
 }
 
 } // namespace codegen

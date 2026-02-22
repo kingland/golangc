@@ -36,6 +36,12 @@ public:
     /// Get the interface layout type: {ptr, ptr}
     [[nodiscard]] IRType* interface_type() const { return iface_; }
 
+    /// Get size in bytes of an IR type (for map key/value sizing).
+    [[nodiscard]] static int64_t type_size(const IRType* t);
+
+    /// Create an anonymous struct type for multiple return values.
+    [[nodiscard]] IRType* make_tuple_type(std::vector<IRType*> fields);
+
 private:
     // Owned types
     std::vector<std::unique_ptr<IRType>> owned_types_;

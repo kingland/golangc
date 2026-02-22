@@ -153,6 +153,9 @@ void X64CodeGenerator::emit_module_header(const ir::Module& module) {
     out_ += "EXTERN golangc_chan_send:PROC\n";
     out_ += "EXTERN golangc_chan_recv:PROC\n";
     out_ += "EXTERN golangc_go_spawn:PROC\n";
+    out_ += "EXTERN golangc_map_make:PROC\n";
+    out_ += "EXTERN golangc_map_get:PROC\n";
+    out_ += "EXTERN golangc_map_set:PROC\n";
     out_ += "EXTERN malloc:PROC\n";
     emit_blank();
 }
@@ -418,6 +421,15 @@ void X64CodeGenerator::prescan_temps(const ir::Function& func) {
                         frame_.allocate(extra_id, 8);
                         temp_slots_[extra_id] = frame_.offset_of(extra_id);
                     }
+                }
+            }
+
+            // MapGet needs a hidden ok-slot (id + 300000) pre-allocated in the frame
+            if (inst->opcode == ir::Opcode::MapGet) {
+                uint32_t ok_id = inst->id + 300000;
+                if (temp_slots_.find(ok_id) == temp_slots_.end()) {
+                    int32_t ok_off = frame_.allocate(ok_id, 8);
+                    temp_slots_[ok_id] = ok_off;
                 }
             }
         }

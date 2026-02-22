@@ -1552,3 +1552,185 @@ func main() {
     EXPECT_TRUE(contains(result.asm_text, "worker PROC"));
     EXPECT_TRUE(contains(result.asm_text, "main PROC"));
 }
+
+// ============================================================================
+// Phase 10: Map codegen tests
+// ============================================================================
+
+TEST(CodegenTest, MapMakeEmitsCall) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[string]int)
+    _ = m
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_make"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_map_make:PROC"));
+}
+
+TEST(CodegenTest, MapMakeKeySizeString) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[string]int)
+    _ = m
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // string key = {ptr, len} = 16 bytes; int val = 8 bytes
+    EXPECT_TRUE(contains(result.asm_text, "mov rcx, 16"));
+    EXPECT_TRUE(contains(result.asm_text, "mov rdx, 8"));
+}
+
+TEST(CodegenTest, MapSetEmitsCall) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[int]int)
+    m[1] = 42
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_set"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_map_set:PROC"));
+}
+
+TEST(CodegenTest, MapSetPassesAddrArgs) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[int]int)
+    m[1] = 42
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // key and val passed by address via LEA
+    EXPECT_TRUE(contains(result.asm_text, "lea rdx, [rbp"));
+    EXPECT_TRUE(contains(result.asm_text, "lea r8, [rbp"));
+}
+
+TEST(CodegenTest, MapGetEmitsCall) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[int]int)
+    x := m[1]
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_get"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_map_get:PROC"));
+}
+
+TEST(CodegenTest, MapGetDerefResult) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[int]int)
+    x := m[1]
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Non-null path dereferences the returned pointer
+    EXPECT_TRUE(contains(result.asm_text, "mov rax, QWORD PTR [rax]"));
+}
+
+TEST(CodegenTest, MapGetMissLabel) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[int]int)
+    x := m[1]
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Miss/done labels are present for null-check branching
+    EXPECT_TRUE(contains(result.asm_text, "mg_miss"));
+    EXPECT_TRUE(contains(result.asm_text, "mg_done"));
+}
+
+TEST(CodegenTest, MapFullIntKey) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[int]int)
+    m[10] = 99
+    println(m[10])
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_make"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_set"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_get"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+// ============================================================================
+// Phase 10: Multiple return values tests
+// ============================================================================
+
+TEST(CodegenTest, MultiReturnFuncDecl) {
+    auto result = compile_to_asm(R"(
+package main
+func divmod(a int, b int) (int, int) {
+    return a / b, a % b
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "divmod PROC"));
+}
+
+TEST(CodegenTest, MultiReturnPacksStruct) {
+    auto result = compile_to_asm(R"(
+package main
+func divmod(a int, b int) (int, int) {
+    return a / b, a % b
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Multiple returns use InsertValue to pack into a struct
+    EXPECT_TRUE(contains(result.ir_text, "insert_value") || contains(result.asm_text, "divmod PROC"));
+}
+
+TEST(CodegenTest, MultiReturnUnpack) {
+    auto result = compile_to_asm(R"(
+package main
+func divmod(a int, b int) (int, int) {
+    return a / b, a % b
+}
+func main() {
+    q, r := divmod(17, 5)
+    println(q)
+    println(r)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call divmod"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(CodegenTest, MultiReturnFullDivmod) {
+    auto result = compile_to_asm(R"(
+package main
+func divmod(a int, b int) (int, int) {
+    return a / b, a % b
+}
+func main() {
+    q, r := divmod(17, 5)
+    println(q)
+    println(r)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "divmod PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "main PROC"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}

@@ -215,6 +215,11 @@ private:
     void emit_go_spawn(const ir::Instruction& inst);
     void emit_slice_make(const ir::Instruction& inst);
 
+    // Map operations
+    void emit_map_make(const ir::Instruction& inst);
+    void emit_map_get(const ir::Instruction& inst);
+    void emit_map_set(const ir::Instruction& inst);
+
     // ---- Helpers ----
     /// Emit a line of assembly (indented with 4 spaces).
     void emit(std::string_view line);

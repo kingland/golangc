@@ -137,10 +137,27 @@ void IRGenerator::gen_assign(ast::AssignStmt& stmt) {
 
     // Simple assignment: x = y or x, y = a, b
     for (uint32_t i = 0; i < stmt.lhs.count && i < stmt.rhs.count; ++i) {
+        auto* lhs_expr = stmt.lhs[i];
+
+        // Detect map-index LHS: m[k] = v
+        if (lhs_expr->kind == ast::ExprKind::Index) {
+            auto* base_info = expr_info(lhs_expr->index.x);
+            if (base_info && base_info->type &&
+                sema::underlying(base_info->type)->kind == sema::TypeKind::Map) {
+                auto* m = gen_expr(lhs_expr->index.x);
+                auto* key = gen_expr(lhs_expr->index.index);
+                auto* val = gen_expr(stmt.rhs[i]);
+                if (m && key && val) {
+                    builder_.create_map_set(m, key, val);
+                }
+                continue;
+            }
+        }
+
         auto* rhs = gen_expr(stmt.rhs[i]);
         if (!rhs) continue;
 
-        auto* lhs_addr = gen_addr(stmt.lhs[i]);
+        auto* lhs_addr = gen_addr(lhs_expr);
         if (lhs_addr) {
             builder_.create_store(rhs, lhs_addr);
         }
@@ -148,6 +165,68 @@ void IRGenerator::gen_assign(ast::AssignStmt& stmt) {
 }
 
 void IRGenerator::gen_short_var_decl(ast::ShortVarDeclStmt& stmt) {
+    // Special case: v, ok := m[key]  (map index with two LHS variables)
+    if (stmt.lhs.count == 2 && stmt.rhs.count == 1 &&
+        stmt.rhs[0]->kind == ast::ExprKind::Index) {
+        auto* base_info = expr_info(stmt.rhs[0]->index.x);
+        if (base_info && base_info->type &&
+            sema::underlying(base_info->type)->kind == sema::TypeKind::Map) {
+            auto* m      = gen_expr(stmt.rhs[0]->index.x);
+            auto* key    = gen_expr(stmt.rhs[0]->index.index);
+            auto* map_t  = sema::underlying(base_info->type);
+            IRType* val_ir = type_map_.i64_type();
+            if (map_t->map.value) val_ir = map_sema_type(map_t->map.value);
+
+            // Allocate a local ok slot
+            auto* ok_alloca = builder_.create_alloca(type_map_.i64_type(), "ok.addr");
+            auto* mg = builder_.create_map_get(m, key, val_ir, "map_get");
+
+            // Bind value variable (lhs[0])
+            if (stmt.lhs[0]->kind == ast::ExprKind::Ident) {
+                auto* info = expr_info(stmt.lhs[0]);
+                if (info && info->symbol) {
+                    auto* a = builder_.create_alloca(val_ir, std::string(stmt.lhs[0]->ident.name) + ".addr");
+                    builder_.create_store(mg, a);
+                    var_map_[info->symbol] = a;
+                }
+            }
+
+            // Bind ok variable (lhs[1]) — load from the ok_alloca
+            // Note: golangc_map_get will set it via out_ok parameter in codegen
+            if (stmt.lhs[1]->kind == ast::ExprKind::Ident) {
+                auto* info = expr_info(stmt.lhs[1]);
+                if (info && info->symbol) {
+                    var_map_[info->symbol] = ok_alloca;
+                }
+            }
+            return;
+        }
+    }
+
+    // Special case: multi-return function call  a, b := f()
+    if (stmt.lhs.count > 1 && stmt.rhs.count == 1) {
+        auto* rhs_val = gen_expr(stmt.rhs[0]);
+        if (rhs_val && rhs_val->type && rhs_val->type->is_struct() &&
+            rhs_val->type->fields.size() == stmt.lhs.count) {
+            for (uint32_t i = 0; i < stmt.lhs.count; ++i) {
+                if (stmt.lhs[i]->kind != ast::ExprKind::Ident) continue;
+                auto* info = expr_info(stmt.lhs[i]);
+                if (!info || !info->symbol) continue;
+
+                IRType* field_type = rhs_val->type->fields[i];
+                auto* extracted = builder_.create_extract_value(
+                    rhs_val, i, field_type,
+                    std::string(stmt.lhs[i]->ident.name));
+                auto* alloca = builder_.create_alloca(
+                    field_type, std::string(stmt.lhs[i]->ident.name) + ".addr");
+                builder_.create_store(extracted, alloca);
+                var_map_[info->symbol] = alloca;
+            }
+            return;
+        }
+    }
+
+    // Normal single-assignment short var decl
     for (uint32_t i = 0; i < stmt.lhs.count && i < stmt.rhs.count; ++i) {
         auto* rhs = gen_expr(stmt.rhs[i]);
         if (!rhs) continue;
@@ -179,10 +258,24 @@ void IRGenerator::gen_return(ast::ReturnStmt& stmt) {
         return;
     }
 
-    // Multiple return values: pack into a struct
-    // For now, just return the first value
-    auto* val = gen_expr(stmt.results[0]);
-    builder_.create_ret(val);
+    // Multiple return values: pack into a struct via InsertValue sequence
+    // Build the tuple IR type from the current function's return type
+    IRType* tuple_type = current_func_ ? current_func_->return_type : nullptr;
+    if (!tuple_type || !tuple_type->is_struct()) {
+        // Fallback: just return the first value
+        auto* val = gen_expr(stmt.results[0]);
+        builder_.create_ret(val);
+        return;
+    }
+
+    // Start with a nil/zero struct
+    auto* packed = builder_.create_const_nil(tuple_type, "ret.pack");
+    for (uint32_t i = 0; i < stmt.results.count; ++i) {
+        auto* val = gen_expr(stmt.results[i]);
+        if (!val) continue;
+        packed = builder_.create_insert_value(packed, val, i, "ret.pack");
+    }
+    builder_.create_ret(packed);
 }
 
 void IRGenerator::gen_if(ast::IfStmt& stmt) {
@@ -321,22 +414,38 @@ void IRGenerator::gen_range(ast::RangeStmt& stmt) {
         }
     }
 
-    // Bind value variable (simplified)
+    // Bind value variable — load the actual element from the collection
     if (stmt.value && stmt.value->kind == ast::ExprKind::Ident) {
         auto* val_info = expr_info(stmt.value);
         if (val_info && val_info->symbol) {
             IRType* elem_type = type_map_.i64_type();
-            if (base_type->kind == sema::TypeKind::Slice) {
+            Value* elem_val = nullptr;
+
+            auto* idx_val = builder_.create_load(idx_alloca, type_map_.i64_type(), "range.idx.val");
+
+            if (base_type->kind == sema::TypeKind::Slice && base_type->slice.element) {
                 elem_type = map_sema_type(base_type->slice.element);
-            } else if (base_type->kind == sema::TypeKind::Array) {
+                // Load via SliceIndex — returns the element value
+                elem_val = builder_.create_slice_index(range_val, idx_val, elem_type, "range.elem");
+            } else if (base_type->kind == sema::TypeKind::Array && base_type->array.element) {
                 elem_type = map_sema_type(base_type->array.element);
+                // Get address of array element, then load
+                auto* elem_ptr = builder_.create_getptr(
+                    gen_addr(stmt.x) ? gen_addr(stmt.x)
+                                     : builder_.create_alloca(map_sema_type(range_info->type), "arr.tmp"),
+                    idx_val, type_map_.ptr_type(), "arr.elem.addr");
+                elem_val = builder_.create_load(elem_ptr, elem_type, "range.elem");
             } else if (sema::is_string(range_info->type)) {
-                elem_type = type_map_.i32_type(); // rune
+                elem_type = type_map_.i8_type();
+                elem_val = builder_.create_string_index(range_val, idx_val, "range.char");
             }
+
             auto* val_alloca = builder_.create_alloca(elem_type,
                 std::string(stmt.value->ident.name) + ".addr");
+            if (elem_val) {
+                builder_.create_store(elem_val, val_alloca);
+            }
             var_map_[val_info->symbol] = val_alloca;
-            // TODO: actually load the element from the collection
         }
     }
 

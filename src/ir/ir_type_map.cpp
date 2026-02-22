@@ -211,5 +211,32 @@ IRType* IRTypeMap::map_type(sema::Type* t) {
     return result;
 }
 
+IRType* IRTypeMap::make_tuple_type(std::vector<IRType*> fields) {
+    return make_struct_type(std::move(fields));
+}
+
+int64_t IRTypeMap::type_size(const IRType* t) {
+    if (!t) return 8;
+    switch (t->kind) {
+        case IRTypeKind::Void: return 0;
+        case IRTypeKind::I1:
+        case IRTypeKind::I8:  return 1;
+        case IRTypeKind::I16: return 2;
+        case IRTypeKind::I32:
+        case IRTypeKind::F32: return 4;
+        case IRTypeKind::I64:
+        case IRTypeKind::F64:
+        case IRTypeKind::Ptr: return 8;
+        case IRTypeKind::Struct: {
+            int64_t total = 0;
+            for (auto* f : t->fields) total += type_size(f);
+            return total;
+        }
+        case IRTypeKind::Array:
+            return (t->element ? type_size(t->element) : 8) * t->count;
+        default: return 8;
+    }
+}
+
 } // namespace ir
 } // namespace golangc
