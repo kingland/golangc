@@ -219,6 +219,15 @@ private:
     void emit_map_make(const ir::Instruction& inst);
     void emit_map_get(const ir::Instruction& inst);
     void emit_map_set(const ir::Instruction& inst);
+    void emit_map_len(const ir::Instruction& inst);
+    void emit_map_delete(const ir::Instruction& inst);
+    void emit_map_iter_make(const ir::Instruction& inst);
+    void emit_map_iter_next(const ir::Instruction& inst);
+    void emit_map_iter_free(const ir::Instruction& inst);
+
+    // Extended slice operations
+    void emit_slice_index_addr(const ir::Instruction& inst);
+    void emit_slice_append(const ir::Instruction& inst);
 
     // ---- Helpers ----
     /// Emit a line of assembly (indented with 4 spaces).

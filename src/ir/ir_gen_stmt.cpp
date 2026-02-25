@@ -367,6 +367,77 @@ void IRGenerator::gen_range(ast::RangeStmt& stmt) {
     auto* range_info = expr_info(stmt.x);
     if (!range_info || !range_info->type) return;
 
+    auto* base_type = sema::underlying(range_info->type);
+
+    // ---- Map range: for k, v := range m ----
+    if (base_type->kind == sema::TypeKind::Map) {
+        // Create iterator and loop blocks
+        auto* cond_bb = current_func_->create_block(fresh_block_name("range.cond"));
+        auto* body_bb = current_func_->create_block(fresh_block_name("range.body"));
+        auto* done_bb = current_func_->create_block(fresh_block_name("range.done"));
+
+        // iter = golangc_map_iter_make(m)
+        auto* iter = builder_.create_map_iter_make(range_val, "range.iter");
+        builder_.create_br(cond_bb);
+
+        // Condition: ok = golangc_map_iter_next(iter, &key, &val)  → ok != 0
+        builder_.set_insert_block(cond_bb);
+
+        IRType* key_type = type_map_.i64_type();
+        IRType* val_type = type_map_.i64_type();
+        if (base_type->map.key)   key_type = map_sema_type(base_type->map.key);
+        if (base_type->map.value) val_type  = map_sema_type(base_type->map.value);
+
+        // Pre-allocate key/val storage for the iterator to write into
+        auto* key_alloca = builder_.create_alloca(key_type, "range.key.addr");
+        auto* val_alloca = builder_.create_alloca(val_type,  "range.val.addr");
+
+        // MapIterNext writes key+val into key_alloca/val_alloca and returns 1 if more
+        auto* ok = builder_.create_map_iter_next(iter, key_type, val_type, "range.ok");
+        // imm_int on MapIterNext carries key_alloca->id and val_alloca->id via field_index
+        // We relay these IDs through the instruction so codegen knows where to write
+        {
+            auto* ok_inst = dynamic_cast<ir::Instruction*>(ok);
+            if (ok_inst) {
+                ok_inst->operands.push_back(key_alloca);
+                ok_inst->operands.push_back(val_alloca);
+            }
+        }
+
+        auto* cond = builder_.create_ne(ok, builder_.create_const_int(type_map_.i64_type(), 0), "range.cond");
+        builder_.create_condbr(cond, body_bb, done_bb);
+
+        // Body
+        loop_stack_.push_back({done_bb, cond_bb});
+        builder_.set_insert_block(body_bb);
+
+        // Bind key variable
+        if (stmt.key && stmt.key->kind == ast::ExprKind::Ident) {
+            auto* key_info = expr_info(stmt.key);
+            if (key_info && key_info->symbol && stmt.key->ident.name != "_") {
+                var_map_[key_info->symbol] = key_alloca;
+            }
+        }
+        // Bind value variable
+        if (stmt.value && stmt.value->kind == ast::ExprKind::Ident) {
+            auto* val_info = expr_info(stmt.value);
+            if (val_info && val_info->symbol && stmt.value->ident.name != "_") {
+                var_map_[val_info->symbol] = val_alloca;
+            }
+        }
+
+        gen_stmt(stmt.body);
+        if (!builder_.insert_block()->has_terminator()) {
+            builder_.create_br(cond_bb);
+        }
+        loop_stack_.pop_back();
+
+        // Done: free iterator
+        builder_.set_insert_block(done_bb);
+        builder_.create_map_iter_free(iter);
+        return;
+    }
+
     auto* cond_bb = current_func_->create_block(fresh_block_name("range.cond"));
     auto* body_bb = current_func_->create_block(fresh_block_name("range.body"));
     auto* post_bb = current_func_->create_block(fresh_block_name("range.post"));
@@ -378,7 +449,6 @@ void IRGenerator::gen_range(ast::RangeStmt& stmt) {
     builder_.create_store(zero, idx_alloca);
 
     // Get length
-    auto* base_type = sema::underlying(range_info->type);
     Value* length = nullptr;
     if (base_type->kind == sema::TypeKind::Slice) {
         length = builder_.create_slice_len(range_val, "range.len");

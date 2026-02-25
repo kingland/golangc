@@ -98,9 +98,18 @@ void X64CodeGenerator::emit_instruction(const ir::Instruction& inst,
         case ir::Opcode::SliceMake: emit_slice_make(inst); break;
 
         // Map operations
-        case ir::Opcode::MapMake: emit_map_make(inst); break;
-        case ir::Opcode::MapGet:  emit_map_get(inst);  break;
-        case ir::Opcode::MapSet:  emit_map_set(inst);  break;
+        case ir::Opcode::MapMake:     emit_map_make(inst);     break;
+        case ir::Opcode::MapGet:      emit_map_get(inst);      break;
+        case ir::Opcode::MapSet:      emit_map_set(inst);      break;
+        case ir::Opcode::MapLen:      emit_map_len(inst);      break;
+        case ir::Opcode::MapDelete:   emit_map_delete(inst);   break;
+        case ir::Opcode::MapIterMake: emit_map_iter_make(inst); break;
+        case ir::Opcode::MapIterNext: emit_map_iter_next(inst); break;
+        case ir::Opcode::MapIterFree: emit_map_iter_free(inst); break;
+
+        // Extended slice operations
+        case ir::Opcode::SliceIndexAddr: emit_slice_index_addr(inst); break;
+        case ir::Opcode::SliceAppend:    emit_slice_append(inst);     break;
 
         // Float operations
         case ir::Opcode::ConstFloat: emit_const_float(inst); break;
@@ -1485,6 +1494,197 @@ void X64CodeGenerator::emit_map_set(const ir::Instruction& inst) {
     emit("sub rsp, 32");
     emit("call golangc_map_set");
     emit("add rsp, 32");
+}
+
+// ============================================================================
+// Extended Map operations
+// ============================================================================
+
+// emit_map_len: call golangc_map_len(m) → i64 in result slot
+void X64CodeGenerator::emit_map_len(const ir::Instruction& inst) {
+    auto slot = get_temp_slot(inst.id);
+    load_value_to_reg(inst.operands[0], X64Reg::RCX);
+    emit(fmt::format("sub rsp, {}", kShadowSpace));
+    emit("call golangc_map_len");
+    emit(fmt::format("add rsp, {}", kShadowSpace));
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+}
+
+// emit_map_delete: call golangc_map_delete(m, &key_slot)
+void X64CodeGenerator::emit_map_delete(const ir::Instruction& inst) {
+    // Load map pointer → RCX
+    load_value_to_reg(inst.operands[0], X64Reg::RCX);
+
+    // Spill key if constant
+    const ir::Value* key_val = inst.operands[1];
+    const ir::Instruction* key_inst = dynamic_cast<const ir::Instruction*>(key_val);
+    if (key_inst &&
+        (key_inst->opcode == ir::Opcode::ConstInt || key_inst->opcode == ir::Opcode::ConstBool)) {
+        if (!temp_slots_.count(key_val->id)) {
+            int32_t s = frame_.allocate(key_val->id, 8);
+            temp_slots_[key_val->id] = s;
+        }
+        emit(fmt::format("mov rax, {}", key_inst->imm_int));
+        emit(fmt::format("mov QWORD PTR [rbp{}], rax", temp_slots_[key_val->id]));
+    }
+
+    int32_t key_slot = 0;
+    if (temp_slots_.count(key_val->id))    key_slot = temp_slots_[key_val->id];
+    else if (frame_.has_slot(key_val->id)) key_slot = frame_.offset_of(key_val->id);
+    emit(fmt::format("lea rdx, [rbp{}]", key_slot));
+
+    emit(fmt::format("sub rsp, {}", kShadowSpace));
+    emit("call golangc_map_delete");
+    emit(fmt::format("add rsp, {}", kShadowSpace));
+}
+
+// emit_map_iter_make: call golangc_map_iter_make(m) → ptr in result slot
+void X64CodeGenerator::emit_map_iter_make(const ir::Instruction& inst) {
+    auto slot = get_temp_slot(inst.id);
+    load_value_to_reg(inst.operands[0], X64Reg::RCX);
+    emit(fmt::format("sub rsp, {}", kShadowSpace));
+    emit("call golangc_map_iter_make");
+    emit(fmt::format("add rsp, {}", kShadowSpace));
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+}
+
+// emit_map_iter_next: call golangc_map_iter_next(iter, &key_slot, &val_slot) → 1/0
+// operands: [iter, key_alloca, val_alloca]
+void X64CodeGenerator::emit_map_iter_next(const ir::Instruction& inst) {
+    auto slot = get_temp_slot(inst.id);
+
+    // RCX = iter pointer
+    load_value_to_reg(inst.operands[0], X64Reg::RCX);
+
+    // RDX = &key_slot
+    const ir::Value* key_alloca = inst.operands.size() > 1 ? inst.operands[1] : nullptr;
+    if (key_alloca) {
+        int32_t ks = frame_.has_slot(key_alloca->id) ? frame_.offset_of(key_alloca->id)
+                                                     : get_temp_slot(key_alloca->id);
+        emit(fmt::format("lea rdx, [rbp{}]", ks));
+    } else {
+        emit("xor edx, edx");
+    }
+
+    // R8 = &val_slot
+    const ir::Value* val_alloca = inst.operands.size() > 2 ? inst.operands[2] : nullptr;
+    if (val_alloca) {
+        int32_t vs = frame_.has_slot(val_alloca->id) ? frame_.offset_of(val_alloca->id)
+                                                     : get_temp_slot(val_alloca->id);
+        emit(fmt::format("lea r8, [rbp{}]", vs));
+    } else {
+        emit("xor r8d, r8d");
+    }
+
+    emit(fmt::format("sub rsp, {}", kShadowSpace));
+    emit("call golangc_map_iter_next");
+    emit(fmt::format("add rsp, {}", kShadowSpace));
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+}
+
+// emit_map_iter_free: call golangc_map_iter_free(iter)
+void X64CodeGenerator::emit_map_iter_free(const ir::Instruction& inst) {
+    load_value_to_reg(inst.operands[0], X64Reg::RCX);
+    emit(fmt::format("sub rsp, {}", kShadowSpace));
+    emit("call golangc_map_iter_free");
+    emit(fmt::format("add rsp, {}", kShadowSpace));
+}
+
+// ============================================================================
+// Extended Slice operations
+// ============================================================================
+
+// emit_slice_index_addr: compute &slice[index] → store address in result slot
+// This is used as a GetPtr-like op so emit_load/emit_store will dereference it.
+void X64CodeGenerator::emit_slice_index_addr(const ir::Instruction& inst) {
+    auto slot = get_temp_slot(inst.id);
+    auto* slice = inst.operands[0];
+    auto* index = inst.operands[1];
+
+    // Load slice data pointer (first QWORD)
+    if (temp_slots_.count(slice->id))
+        emit(fmt::format("mov rcx, QWORD PTR [rbp{}]", temp_slots_[slice->id]));
+    else if (frame_.has_slot(slice->id))
+        emit(fmt::format("mov rcx, QWORD PTR [rbp{}]", frame_.offset_of(slice->id)));
+
+    // index * 8 → rax
+    load_value_to_rax(index);
+    emit("imul rax, 8");
+    // ptr + offset → rax
+    emit("add rax, rcx");
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+}
+
+// emit_slice_append: call golangc_slice_append(&slice_slot, &elem_slot, elem_size)
+// The slice triple in memory (ptr/len/cap) is updated in-place by the runtime.
+// operands[0] = slice value, operands[1] = element value
+void X64CodeGenerator::emit_slice_append(const ir::Instruction& inst) {
+    // Result is the updated slice (same layout as operands[0]).
+    // We first copy the current slice to the result slot, then call append in-place.
+    auto result_slot = get_temp_slot(inst.id);
+
+    // Pre-allocate alias slots for the result struct QWORDs (prescan handles this for structs;
+    // SliceAppend has a struct return type so prescan already did it).
+    auto it1 = temp_slots_.find(inst.id + 100000);
+    int32_t result_len_slot = (it1 != temp_slots_.end()) ? it1->second : result_slot + 8;
+    auto it2 = temp_slots_.find(inst.id + 200000);
+    int32_t result_cap_slot = (it2 != temp_slots_.end()) ? it2->second : result_slot + 16;
+
+    auto* slice_val = inst.operands[0];
+    // Copy current slice triple into result slots
+    {
+        auto load_qword = [&](const ir::Value* v, int32_t q) -> int32_t {
+            if (q == 0) {
+                if (temp_slots_.count(v->id)) return temp_slots_[v->id];
+                if (frame_.has_slot(v->id))   return frame_.offset_of(v->id);
+            } else {
+                uint32_t xid = v->id + static_cast<uint32_t>(q) * 100000;
+                auto xi = temp_slots_.find(xid);
+                if (xi != temp_slots_.end()) return xi->second;
+                if (frame_.has_slot(xid))    return frame_.offset_of(xid);
+                // Contiguous layout fallback
+                if (temp_slots_.count(v->id)) return temp_slots_[v->id] + q * 8;
+                if (frame_.has_slot(v->id))   return frame_.offset_of(v->id) + q * 8;
+            }
+            return 0;
+        };
+
+        int32_t dst_slots[3] = {result_slot, result_len_slot, result_cap_slot};
+        for (int q = 0; q < 3; ++q) {
+            emit(fmt::format("mov rax, QWORD PTR [rbp{}]", load_qword(slice_val, q)));
+            emit(fmt::format("mov QWORD PTR [rbp{}], rax", dst_slots[q]));
+        }
+    }
+
+    // Ensure elem is spilled to a slot
+    const ir::Value* elem_val = inst.operands[1];
+    const ir::Instruction* elem_inst = dynamic_cast<const ir::Instruction*>(elem_val);
+    if (elem_inst &&
+        (elem_inst->opcode == ir::Opcode::ConstInt || elem_inst->opcode == ir::Opcode::ConstBool)) {
+        if (!temp_slots_.count(elem_val->id)) {
+            int32_t s = frame_.allocate(elem_val->id, 8);
+            temp_slots_[elem_val->id] = s;
+        }
+        emit(fmt::format("mov rax, {}", elem_inst->imm_int));
+        emit(fmt::format("mov QWORD PTR [rbp{}], rax", temp_slots_[elem_val->id]));
+    }
+
+    // RCX = &result_slot (the slice triple)
+    emit(fmt::format("lea rcx, [rbp{}]", result_slot));
+
+    // RDX = &elem_slot
+    int32_t elem_slot = 0;
+    if (temp_slots_.count(elem_val->id))    elem_slot = temp_slots_[elem_val->id];
+    else if (frame_.has_slot(elem_val->id)) elem_slot = frame_.offset_of(elem_val->id);
+    emit(fmt::format("lea rdx, [rbp{}]", elem_slot));
+
+    // R8 = elem_size (from imm_int, stored by builder)
+    emit(fmt::format("mov r8, {}", inst.imm_int));
+
+    emit(fmt::format("sub rsp, {}", kShadowSpace));
+    emit("call golangc_slice_append");
+    emit(fmt::format("add rsp, {}", kShadowSpace));
+    // The runtime updated [rcx] = result_slot in-place, so the result is already there.
 }
 
 } // namespace codegen

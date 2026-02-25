@@ -2326,12 +2326,20 @@ Expr* Parser::parse_call_expr(Expr* func) {
 
     std::vector<Expr*> args;
     while (!at(TokenKind::RParen) && !at_end()) {
-        // In Go, call arguments can be types (e.g., make(chan int, 10)).
-        // If we see a type keyword that can't start an expression, parse as type
+        // In Go, call arguments can be types (e.g., make(chan int, 10), make([]int, 5)).
+        // If we see a type keyword or '[' that can't start an expression, parse as type
         // and wrap in a CompositeLit with no elements (as a type carrier).
-        if (current_.kind == TokenKind::KW_chan ||
-            current_.kind == TokenKind::KW_map ||
-            current_.kind == TokenKind::KW_interface) {
+        bool is_type_arg = (current_.kind == TokenKind::KW_chan ||
+                            current_.kind == TokenKind::KW_map ||
+                            current_.kind == TokenKind::KW_interface);
+        // '[' starting a call arg is either []T (slice type) or [N]T (array type)
+        // when not followed by a valid expression context — treat as type carrier.
+        if (!is_type_arg && current_.kind == TokenKind::LBracket) {
+            // Peek: if next token is ']' it's []T (slice type), always a type arg.
+            // If next is a digit or ']' it's [N]T. Use type parsing.
+            is_type_arg = true;
+        }
+        if (is_type_arg) {
             auto* type = parse_type();
             // Wrap the type in a CompositeLit with no elements — acts as type carrier
             auto* te = make_expr(ExprKind::CompositeLit);

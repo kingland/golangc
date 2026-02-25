@@ -90,6 +90,12 @@ Value* IRGenerator::gen_addr(ast::Expr* expr) {
                 if (!base_addr || !idx) return nullptr;
                 return builder_.create_getptr(base_addr, idx, type_map_.ptr_type(), "elem.addr");
             }
+            if (base_type->kind == sema::TypeKind::Slice) {
+                auto* s = gen_expr(expr->index.x);
+                auto* idx = gen_expr(expr->index.index);
+                if (!s || !idx) return nullptr;
+                return builder_.create_slice_index_addr(s, idx, "slice.elem.addr");
+            }
             return nullptr;
         }
         default:
@@ -627,6 +633,8 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
                     return builder_.create_string_len(arg, "len");
                 if (t->kind == sema::TypeKind::Array)
                     return builder_.create_const_int(type_map_.i64_type(), t->array.length, "len");
+                if (t->kind == sema::TypeKind::Map)
+                    return builder_.create_map_len(arg, "len");
             }
         }
         return builder_.create_const_int(type_map_.i64_type(), 0, "len");
@@ -683,8 +691,25 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
     }
 
     if (builtin_name == "append") {
+        if (call.args.count >= 2) {
+            auto* slice = gen_expr(call.args[0]);
+            auto* elem  = gen_expr(call.args[1]);
+            if (slice && elem) {
+                IRType* elem_type = elem->type ? elem->type : type_map_.i64_type();
+                return builder_.create_slice_append(slice, elem, elem_type, "append");
+            }
+        }
         if (call.args.count >= 1) return gen_expr(call.args[0]);
         return builder_.create_const_nil(type_map_.slice_type(), "append");
+    }
+
+    if (builtin_name == "delete") {
+        if (call.args.count >= 2) {
+            auto* m   = gen_expr(call.args[0]);
+            auto* key = gen_expr(call.args[1]);
+            if (m && key) builder_.create_map_delete(m, key);
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "delete");
     }
 
     if (builtin_name == "panic") {

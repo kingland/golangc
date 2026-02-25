@@ -141,6 +141,17 @@ public:
     Instruction* create_map_get(Value* m, Value* key, IRType* val_type,
                                 const std::string& name = "");
     Instruction* create_map_set(Value* m, Value* key, Value* val);
+    Instruction* create_map_len(Value* m, const std::string& name = "");
+    Instruction* create_map_delete(Value* m, Value* key);
+    Instruction* create_map_iter_make(Value* m, const std::string& name = "");
+    Instruction* create_map_iter_next(Value* iter, IRType* key_type, IRType* val_type,
+                                      const std::string& name = "");
+    Instruction* create_map_iter_free(Value* iter);
+
+    // ---- Extended slice operations ----
+    Instruction* create_slice_index_addr(Value* slice, Value* index, const std::string& name = "");
+    Instruction* create_slice_append(Value* slice, Value* elem, IRType* elem_type,
+                                     const std::string& name = "");
 
     // ---- ID management ----
     [[nodiscard]] uint32_t next_id() { return next_id_++; }

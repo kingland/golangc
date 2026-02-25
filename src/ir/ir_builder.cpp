@@ -1,4 +1,5 @@
 #include "ir/ir_builder.hpp"
+#include "ir/ir_type_map.hpp"
 
 #include <cassert>
 
@@ -522,6 +523,62 @@ Instruction* IRBuilder::create_map_get(Value* m, Value* key, IRType* val_type,
 Instruction* IRBuilder::create_map_set(Value* m, Value* key, Value* val) {
     auto* inst = emit(Opcode::MapSet, type_map_.void_type());
     inst->operands = {m, key, val};
+    return inst;
+}
+
+Instruction* IRBuilder::create_map_len(Value* m, const std::string& name) {
+    return emit_unary(Opcode::MapLen, m, type_map_.i64_type(), name);
+}
+
+Instruction* IRBuilder::create_map_delete(Value* m, Value* key) {
+    auto* inst = emit(Opcode::MapDelete, type_map_.void_type());
+    inst->operands = {m, key};
+    return inst;
+}
+
+Instruction* IRBuilder::create_map_iter_make(Value* m, const std::string& name) {
+    auto* inst = emit(Opcode::MapIterMake, type_map_.ptr_type(), name);
+    inst->operands = {m};
+    return inst;
+}
+
+Instruction* IRBuilder::create_map_iter_next(Value* iter, IRType* key_type, IRType* val_type,
+                                              const std::string& name) {
+    // Returns a tuple: {ok (i64), key (key_type), val (val_type)}
+    // We model it as a ptr type; the codegen will write key/val into pre-allocated slots
+    (void)key_type;
+    (void)val_type;
+    auto* inst = emit(Opcode::MapIterNext, type_map_.i64_type(), name);
+    inst->operands = {iter};
+    return inst;
+}
+
+Instruction* IRBuilder::create_map_iter_free(Value* iter) {
+    auto* inst = emit(Opcode::MapIterFree, type_map_.void_type());
+    inst->operands = {iter};
+    return inst;
+}
+
+// ============================================================================
+// Extended slice operations
+// ============================================================================
+
+Instruction* IRBuilder::create_slice_index_addr(Value* slice, Value* index,
+                                                  const std::string& name) {
+    auto* inst = emit(Opcode::SliceIndexAddr, type_map_.ptr_type(), name);
+    inst->operands = {slice, index};
+    return inst;
+}
+
+Instruction* IRBuilder::create_slice_append(Value* slice, Value* elem, IRType* elem_type,
+                                             const std::string& name) {
+    // imm_int stores the elem size in bytes (used by codegen to decide copy size)
+    auto* inst = emit(Opcode::SliceAppend, slice->type ? slice->type : type_map_.slice_type(), name);
+    inst->operands = {slice, elem};
+    // Compute element size
+    int64_t elem_sz = 8;
+    if (elem_type) elem_sz = IRTypeMap::type_size(elem_type);
+    inst->imm_int = elem_sz;
     return inst;
 }
 

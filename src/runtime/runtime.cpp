@@ -190,6 +190,117 @@ void* golangc_map_get(golangc_map* m, void* key_ptr, int64_t* out_ok) {
     return nullptr;
 }
 
+int64_t golangc_map_len(golangc_map* m) {
+    return m ? m->count : 0;
+}
+
+void golangc_map_delete(golangc_map* m, void* key_ptr) {
+    if (!m || !key_ptr) return;
+
+    uint64_t h = hash_key(key_ptr, m->key_size);
+    int64_t idx = static_cast<int64_t>(h & static_cast<uint64_t>(m->capacity - 1));
+    for (int64_t probe = 0; probe < m->capacity; ++probe) {
+        if (!m->buckets[idx].key) return; // Not found
+        if (keys_equal(m->buckets[idx].key, key_ptr, m->key_size)) {
+            // Free and mark as deleted (nullptr key = empty slot)
+            free(m->buckets[idx].key);
+            free(m->buckets[idx].val);
+            m->buckets[idx].key = nullptr;
+            m->buckets[idx].val = nullptr;
+            --m->count;
+
+            // Robin Hood: shift subsequent entries back to fill the gap
+            int64_t prev = idx;
+            int64_t next = (idx + 1) & (m->capacity - 1);
+            while (m->buckets[next].key) {
+                uint64_t nh = hash_key(m->buckets[next].key, m->key_size);
+                int64_t ideal = static_cast<int64_t>(nh & static_cast<uint64_t>(m->capacity - 1));
+                // Check if next slot is displaced from its ideal position
+                // (i.e., it belongs at or before prev)
+                bool displaced = false;
+                if (ideal <= prev) {
+                    displaced = (prev >= ideal && next > prev) ||
+                                (next < ideal);
+                } else {
+                    displaced = (prev >= ideal || next <= prev);
+                }
+                (void)displaced;
+                // Simple approach: always backshift
+                m->buckets[prev].key = m->buckets[next].key;
+                m->buckets[prev].val = m->buckets[next].val;
+                m->buckets[next].key = nullptr;
+                m->buckets[next].val = nullptr;
+                prev = next;
+                next = (next + 1) & (m->capacity - 1);
+            }
+            return;
+        }
+        idx = (idx + 1) & (m->capacity - 1);
+    }
+}
+
+// ============================================================================
+// Map iterator
+// ============================================================================
+
+struct golangc_map_iter {
+    golangc_map* map;
+    int64_t      pos;  // current bucket index (0 = start)
+};
+
+golangc_map_iter* golangc_map_iter_make(golangc_map* m) {
+    auto* it = static_cast<golangc_map_iter*>(malloc(sizeof(golangc_map_iter)));
+    if (!it) return nullptr;
+    it->map = m;
+    it->pos = 0;
+    return it;
+}
+
+int64_t golangc_map_iter_next(golangc_map_iter* it, void* out_key, void* out_val) {
+    if (!it || !it->map) return 0;
+    golangc_map* m = it->map;
+    while (it->pos < m->capacity) {
+        int64_t i = it->pos++;
+        if (!m->buckets[i].key) continue;
+        if (out_key) memcpy(out_key, m->buckets[i].key, static_cast<size_t>(m->key_size));
+        if (out_val) memcpy(out_val, m->buckets[i].val, static_cast<size_t>(m->val_size));
+        return 1;
+    }
+    return 0;
+}
+
+void golangc_map_iter_free(golangc_map_iter* it) {
+    free(it);
+}
+
+// ============================================================================
+// Slice append
+// ============================================================================
+
+void golangc_slice_append(void* slice_out, const void* elem_ptr, int64_t elem_size) {
+    // slice_out points to {void* ptr, int64_t len, int64_t cap}
+    void**   s_ptr = static_cast<void**>(slice_out);
+    int64_t* s_len = reinterpret_cast<int64_t*>(static_cast<char*>(slice_out) + 8);
+    int64_t* s_cap = reinterpret_cast<int64_t*>(static_cast<char*>(slice_out) + 16);
+
+    if (*s_len >= *s_cap) {
+        // Grow: double capacity (minimum 8)
+        int64_t new_cap = *s_cap * 2;
+        if (new_cap < 8) new_cap = 8;
+        void* new_ptr = malloc(static_cast<size_t>(new_cap * elem_size));
+        if (!new_ptr) return;
+        if (*s_ptr && *s_len > 0)
+            memcpy(new_ptr, *s_ptr, static_cast<size_t>(*s_len * elem_size));
+        *s_ptr = new_ptr;
+        *s_cap = new_cap;
+    }
+
+    // Append element
+    char* dst = static_cast<char*>(*s_ptr) + (*s_len * elem_size);
+    memcpy(dst, elem_ptr, static_cast<size_t>(elem_size));
+    ++(*s_len);
+}
+
 void golangc_map_set(golangc_map* m, void* key_ptr, void* val_ptr) {
     if (!m || !key_ptr) return;
 

@@ -118,9 +118,16 @@ namespace ir {
         case Opcode::SliceLen:       return "slice_len";
         case Opcode::SliceCap:       return "slice_cap";
         case Opcode::SliceIndex:     return "slice_index";
+        case Opcode::SliceIndexAddr: return "slice_index_addr";
+        case Opcode::SliceAppend:    return "slice_append";
         case Opcode::MapMake:        return "map_make";
         case Opcode::MapGet:         return "map_get";
         case Opcode::MapSet:         return "map_set";
+        case Opcode::MapLen:         return "map_len";
+        case Opcode::MapDelete:      return "map_delete";
+        case Opcode::MapIterMake:    return "map_iter_make";
+        case Opcode::MapIterNext:    return "map_iter_next";
+        case Opcode::MapIterFree:    return "map_iter_free";
         case Opcode::StringLen:      return "string_len";
         case Opcode::StringIndex:    return "string_index";
         case Opcode::StringConcat:   return "string_concat";

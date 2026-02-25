@@ -60,6 +60,34 @@ void* golangc_map_get(golangc_map* m, void* key_ptr, int64_t* out_ok);
 /// Insert or update key → value.
 void golangc_map_set(golangc_map* m, void* key_ptr, void* val_ptr);
 
+/// Return the number of entries in a map.
+int64_t golangc_map_len(golangc_map* m);
+
+/// Delete the entry for key_ptr (no-op if absent).
+void golangc_map_delete(golangc_map* m, void* key_ptr);
+
+// ---- Map iterator ----
+
+struct golangc_map_iter;
+
+/// Create an iterator over a map (snapshot of bucket position).
+golangc_map_iter* golangc_map_iter_make(golangc_map* m);
+
+/// Advance iterator: copies next key/val into out_key/out_val.
+/// Returns 1 if a pair was produced, 0 if exhausted.
+int64_t golangc_map_iter_next(golangc_map_iter* it, void* out_key, void* out_val);
+
+/// Free an iterator created by golangc_map_iter_make.
+void golangc_map_iter_free(golangc_map_iter* it);
+
+// ---- Slice append ----
+
+/// Append one element to a slice, growing if necessary.
+/// slice_out: pointer to {ptr,len,cap} to update in-place.
+/// elem_ptr:  pointer to the element bytes.
+/// elem_size: size of one element in bytes.
+void golangc_slice_append(void* slice_out, const void* elem_ptr, int64_t elem_size);
+
 // ---- Goroutine / Channel runtime ----
 
 struct golangc_chan;

@@ -1734,3 +1734,179 @@ func main() {
     EXPECT_TRUE(contains(result.asm_text, "main PROC"));
     EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
 }
+
+// ============================================================================
+// Phase 11: Slice writes, append, map len/delete, for-range map
+// ============================================================================
+
+TEST(CodegenTest, SliceIndexAddrEmitsStore) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    s := make([]int, 3)
+    s[0] = 42
+    println(s[0])
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call malloc"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(CodegenTest, SliceIndexAddrIsGetPtr) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    s := make([]int, 2)
+    s[1] = 99
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // SliceIndexAddr should compute &s[1] via imul + add
+    EXPECT_TRUE(contains(result.asm_text, "imul rax, 8"));
+}
+
+TEST(CodegenTest, SliceAppendEmitsCall) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    s := make([]int, 0)
+    s = append(s, 10)
+    println(len(s))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_slice_append"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_slice_append:PROC"));
+}
+
+TEST(CodegenTest, SliceAppendPassesAddrRcx) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    s := make([]int, 0)
+    s = append(s, 42)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // RCX should be the address of the slice triple
+    EXPECT_TRUE(contains(result.asm_text, "lea rcx, [rbp"));
+}
+
+TEST(CodegenTest, MapLenEmitsCall) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[string]int)
+    m["a"] = 1
+    println(len(m))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_len"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_map_len:PROC"));
+}
+
+TEST(CodegenTest, MapDeleteEmitsCall) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[string]int)
+    m["hello"] = 42
+    delete(m, "hello")
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_delete"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_map_delete:PROC"));
+}
+
+TEST(CodegenTest, MapDeletePassesAddrRdx) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[string]int)
+    delete(m, "key")
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "lea rdx, [rbp"));
+}
+
+TEST(CodegenTest, ForRangeMapEmitsIterMake) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[string]int)
+    m["x"] = 1
+    for k, v := range m {
+        _ = k
+        _ = v
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_iter_make"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_map_iter_make:PROC"));
+}
+
+TEST(CodegenTest, ForRangeMapEmitsIterNext) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[string]int)
+    for k, v := range m {
+        _ = k
+        _ = v
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_iter_next"));
+}
+
+TEST(CodegenTest, ForRangeMapEmitsIterFree) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[string]int)
+    for k, v := range m {
+        _ = k
+        _ = v
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_iter_free"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_map_iter_free:PROC"));
+}
+
+TEST(CodegenTest, WordfreqCompilesNoTodos) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    m := make(map[string]int)
+    m["hello"] = 3
+    m["world"] = 1
+    delete(m, "world")
+    println(len(m))
+    count := 0
+    for k, v := range m {
+        _ = k
+        _ = v
+        count = count + 1
+    }
+    println(count)
+    s := make([]int, 0)
+    s = append(s, 10)
+    println(len(s))
+    println(s[0])
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_len"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_delete"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_map_iter_make"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_slice_append"));
+}

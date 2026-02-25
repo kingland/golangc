@@ -112,8 +112,9 @@ enum class Opcode : uint8_t {
     // Go-specific
     GoSpawn, DeferCall,
     ChanMake, ChanSend, ChanRecv,
-    SliceMake, SliceLen, SliceCap, SliceIndex,
-    MapMake, MapGet, MapSet,
+    SliceMake, SliceLen, SliceCap, SliceIndex, SliceIndexAddr, SliceAppend,
+    MapMake, MapGet, MapSet, MapLen, MapDelete,
+    MapIterMake, MapIterNext, MapIterFree,
     StringLen, StringIndex, StringConcat,
     InterfaceMake, InterfaceData, InterfaceType,
     Panic, Recover,

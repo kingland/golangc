@@ -156,6 +156,12 @@ void X64CodeGenerator::emit_module_header(const ir::Module& module) {
     out_ += "EXTERN golangc_map_make:PROC\n";
     out_ += "EXTERN golangc_map_get:PROC\n";
     out_ += "EXTERN golangc_map_set:PROC\n";
+    out_ += "EXTERN golangc_map_len:PROC\n";
+    out_ += "EXTERN golangc_map_delete:PROC\n";
+    out_ += "EXTERN golangc_map_iter_make:PROC\n";
+    out_ += "EXTERN golangc_map_iter_next:PROC\n";
+    out_ += "EXTERN golangc_map_iter_free:PROC\n";
+    out_ += "EXTERN golangc_slice_append:PROC\n";
     out_ += "EXTERN malloc:PROC\n";
     emit_blank();
 }
@@ -361,6 +367,8 @@ void X64CodeGenerator::prescan_temps(const ir::Function& func) {
                 case ir::Opcode::Switch:
                 case ir::Opcode::ChanSend:
                 case ir::Opcode::MapSet:
+                case ir::Opcode::MapDelete:
+                case ir::Opcode::MapIterFree:
                 case ir::Opcode::GoSpawn:
                 case ir::Opcode::DeferCall:
                 case ir::Opcode::Panic:
@@ -622,7 +630,8 @@ bool X64CodeGenerator::is_slice_type(const ir::IRType* type) {
 
 bool X64CodeGenerator::is_getptr(const ir::Value* val) {
     auto* inst = dynamic_cast<const ir::Instruction*>(val);
-    return inst && inst->opcode == ir::Opcode::GetPtr;
+    return inst && (inst->opcode == ir::Opcode::GetPtr ||
+                    inst->opcode == ir::Opcode::SliceIndexAddr);
 }
 
 void X64CodeGenerator::emit_struct_copy(int32_t dst_offset, int32_t src_offset,

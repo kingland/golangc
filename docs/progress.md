@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 10 (Maps + Multiple Return Values) - Complete
-## Current Milestone: Phase 10 complete - map runtime (FNV-1a hash table, string-aware keys), multiple return values (tuple packing/unpacking via InsertValue/ExtractValue), for-range value binding, maps.go + multireturn.go → working .exes (109 codegen tests)
-## Completion Estimate: Phase 10 ~100%
+## Current Phase: 11 (Slice writes, append, map len/delete, for-range map) - Complete
+## Current Milestone: Phase 11 complete - SliceIndexAddr (s[i]=v), SliceAppend (append), MapLen (len(map)), MapIterMake/Next/Free (for range map), MapDelete (delete), parser []T fix — wordfreq.go → working .exe (120 codegen tests)
+## Completion Estimate: Phase 11 ~100%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -11,11 +11,11 @@
 | Common Utils | ✅ Complete | 30 | source_location, diagnostic, string_interner, arena_allocator, result |
 | Lexer | ✅ Complete | 89 | All Go tokens, literals, operators, comments, auto-semicolons |
 | AST | ✅ Complete | - | Full node hierarchy (16 expr, 21 stmt, 7 decl, 13 type kinds) |
-| Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse |
+| Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T in call args fixed |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction |
-| IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make |
-| CodeGen | ✅ Complete | 109 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices, goroutines, channels, maps, multi-return |
-| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware) |
+| IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr |
+| CodeGen | ✅ Complete | 120 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return |
+| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware, iter, delete) + slice_append |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
@@ -634,5 +634,44 @@
 - All 496 total tests pass (30+89+87+110+71+109)
 
 #### Next Steps
-- **Phase 11**: Append + slice element write, for-range over strings/slices with value use
-- **Future**: Direct PE generation, buffered channels, GC, closures
+- ~~Phase 11: Append + slice element write, for-range map~~ → Complete
+
+---
+
+### Session 11 - Phase 11: Slice writes, append, map len/delete, for-range map
+#### Completed
+- **7 new IR opcodes**: `SliceIndexAddr`, `SliceAppend`, `MapLen`, `MapDelete`, `MapIterMake`, `MapIterNext`, `MapIterFree`
+- **`src/ir/ir.hpp`**: Added 7 new opcodes; `ir.cpp` updated `opcode_name` for all 7
+- **`src/ir/ir_builder.hpp/cpp`**: Added builder methods for all 7 new opcodes + `create_slice_append` (stores `elem_size` in `imm_int`)
+- **`src/ir/ir_gen_expr.cpp`**:
+  - `gen_addr` for `Index` on slices → emits `SliceIndexAddr` (enabling `s[i] = v`)
+  - `len(map)` → `MapLen` opcode
+  - `append(s, elem)` → `SliceAppend` opcode
+  - `delete(m, k)` → `MapDelete` opcode (new builtin case)
+- **`src/ir/ir_gen_stmt.cpp`**: `gen_range` map branch rewritten — `MapIterMake` → `MapIterNext` loop (passing key/val alloca operands) → `MapIterFree`; key/val variables bound via `var_map_` as before
+- **`src/parser/parser.cpp`**: Fixed `parse_call_expr` to treat `[` as start of a type-arg (wraps `[]T`/`[N]T` in CompositeLit carrier, same as `chan`/`map`/`interface`) — enables `make([]int, n)`
+- **`src/runtime/runtime.hpp`**: Added `golangc_map_len`, `golangc_map_delete`, `golangc_map_iter` struct forward-decl, `golangc_map_iter_make/next/free`, `golangc_slice_append`
+- **`src/runtime/runtime.cpp`**: Implemented all 6 new runtime functions:
+  - `golangc_map_len`: returns `m->count`
+  - `golangc_map_delete`: linear probe find + backshift to maintain probe invariant
+  - `golangc_map_iter_make/next/free`: malloc-based iterator advancing through bucket array
+  - `golangc_slice_append`: doubles capacity on overflow, copies element at `ptr[len]`, increments `len`
+- **`src/codegen/x64_codegen.hpp`**: 10 new private emit_ declarations
+- **`src/codegen/x64_codegen.cpp`**: 9 new EXTERN lines; `prescan_temps` marks `MapDelete`/`MapIterFree` as non-value-producing; `is_getptr` extended to include `SliceIndexAddr`
+- **`src/codegen/x64_codegen_inst.cpp`**: 11 new dispatch cases + 10 emit function implementations
+  - `emit_slice_index_addr`: `mov rcx,[slice_ptr]` → `imul rax,8` → `add rax,rcx` → store address
+  - `emit_slice_append`: copies slice triple to result slots, spills elem, calls `golangc_slice_append(&result, &elem, elem_size)` in-place
+  - `emit_map_len`, `emit_map_delete`, `emit_map_iter_make/next/free`: straightforward runtime call wrappers
+- **New sample**: `samples/wordfreq.go` — exercises map len, delete, for-range, slice append, slice index; prints `2 1 1 3 10 20 30`
+- **11 new codegen tests** (109→120)
+
+#### Current State
+- Slices: make, len, cap, index (read + write), append all working
+- Maps: make, get, set, len, delete, for-range all working
+- For-range: slices, arrays, strings, maps all working
+- All 5 milestone programs compile to working .exes
+- All 507 total tests pass (30+89+87+110+71+120)
+
+#### Next Steps
+- **Phase 12**: Closures (func literals capturing variables), defer with arguments
+- **Future**: Direct PE generation, buffered channels, GC
