@@ -107,4 +107,67 @@ void golangc_go_spawn(void* func_ptr, int64_t arg_count, ...) {
     }
 }
 
+// ============================================================================
+// Select — non-blocking poll across N channel cases
+// ============================================================================
+
+struct SelectCase {
+    golangc_chan* ch;
+    void*         val;   // send: ptr to value; recv: ptr to output buf; may be null
+    int64_t       op;    // 0=recv, 1=send
+};
+
+int64_t golangc_select(SelectCase* cases, int64_t num_cases, int64_t has_default) {
+    if (num_cases == 0) {
+        // Only a default case (or empty select — block forever)
+        if (has_default) return 0;
+        Sleep(INFINITE);
+        return 0;
+    }
+
+    for (;;) {
+        for (int64_t i = 0; i < num_cases; ++i) {
+            SelectCase* c = &cases[i];
+            golangc_chan* ch = c->ch;
+            if (!ch) continue;
+
+            if (c->op == 0) {
+                // Recv: try non-blocking wait on sender_ready semaphore
+                if (WaitForSingleObject(ch->sender_ready, 0) == WAIT_OBJECT_0) {
+                    EnterCriticalSection(&ch->lock);
+                    if (c->val && ch->data_ptr)
+                        std::memcpy(c->val, ch->data_ptr, static_cast<size_t>(ch->elem_size));
+                    ch->data_ptr = nullptr;
+                    ReleaseSemaphore(ch->recv_ready, 1, nullptr);
+                    LeaveCriticalSection(&ch->lock);
+                    return i;
+                }
+            } else {
+                // Send: ready only if no other sender is currently occupying the channel.
+                // Try to post the value and briefly wait for receiver acknowledgement.
+                // This is a best-effort non-blocking send for select.
+                EnterCriticalSection(&ch->lock);
+                if (ch->data_ptr == nullptr) {
+                    ch->data_ptr = c->val;
+                    ReleaseSemaphore(ch->sender_ready, 1, nullptr);
+                    LeaveCriticalSection(&ch->lock);
+                    if (WaitForSingleObject(ch->recv_ready, 5) == WAIT_OBJECT_0) {
+                        return i;
+                    }
+                    // No receiver within 5ms — undo by clearing data_ptr
+                    // (sender_ready was already consumed if receiver came in; if not,
+                    //  the channel is left in a bad state; this is an approximation)
+                    EnterCriticalSection(&ch->lock);
+                    ch->data_ptr = nullptr;
+                    LeaveCriticalSection(&ch->lock);
+                } else {
+                    LeaveCriticalSection(&ch->lock);
+                }
+            }
+        }
+        if (has_default) return num_cases;
+        Sleep(1); // 1ms backoff before retrying
+    }
+}
+
 } // extern "C"

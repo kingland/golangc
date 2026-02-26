@@ -45,6 +45,9 @@ public:
     /// Create an anonymous struct type for multiple return values.
     [[nodiscard]] IRType* make_tuple_type(std::vector<IRType*> fields);
 
+    /// Create an array type (element type × count).
+    [[nodiscard]] IRType* make_array_type(IRType* elem, int64_t count);
+
 private:
     // Owned types
     std::vector<std::unique_ptr<IRType>> owned_types_;
@@ -70,7 +73,6 @@ private:
 
     IRType* make_type(IRTypeKind kind);
     IRType* make_struct_type(std::vector<IRType*> fields, std::string name = "");
-    IRType* make_array_type(IRType* elem, int64_t count);
     IRType* make_func_type(IRType* ret, std::vector<IRType*> params);
 
     IRType* map_basic_type(sema::BasicKind kind);

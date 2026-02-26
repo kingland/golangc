@@ -481,7 +481,9 @@ ExprInfo Checker::check_call(ast::CallExpr& expr) {
         auto arg_info = check_expr(expr.args[i]);
         if (i < ft->params.size()) {
             Type* param_type = ft->params[i].type;
-            if (ft->params[i].is_variadic && param_type &&
+            // For variadic params, unwrap []T → T unless this is a spread call (f(s...))
+            bool is_spread_arg = expr.has_ellipsis && (i == expr.args.count - 1);
+            if (!is_spread_arg && ft->params[i].is_variadic && param_type &&
                 param_type->kind == TypeKind::Slice) {
                 param_type = param_type->slice.element;
             }

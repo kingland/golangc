@@ -39,6 +39,9 @@ void IRGenerator::gen_stmt(ast::Stmt* stmt) {
         case ast::StmtKind::Switch:
             gen_switch(stmt->switch_);
             break;
+        case ast::StmtKind::Select:
+            gen_select(stmt->select);
+            break;
         case ast::StmtKind::IncDec:
             gen_inc_dec(stmt->inc_dec);
             break;
@@ -662,6 +665,234 @@ void IRGenerator::gen_inc_dec(ast::IncDecStmt& stmt) {
     }
 
     builder_.create_store(result, addr);
+}
+
+void IRGenerator::gen_select(ast::SelectStmt& stmt) {
+    // ----------------------------------------------------------------
+    // Classify CommClauses
+    // ----------------------------------------------------------------
+    struct CaseDesc {
+        ast::CommClause* cc;
+        bool is_default = false;
+        bool is_send    = false;
+        ast::Expr* ch_expr  = nullptr; // channel expression
+        ast::Expr* val_expr = nullptr; // send value, or null for recv
+        Value* recv_buf     = nullptr; // alloca for receive output buffer
+        const sema::Symbol* recv_sym = nullptr; // symbol bound by v := <-ch
+        int32_t chan_index  = -1;      // index into channel-cases array
+    };
+
+    std::vector<CaseDesc> descs;
+    int32_t default_index = -1; // index into descs
+    int32_t num_chan_cases = 0;
+
+    for (uint32_t i = 0; i < stmt.cases.count; ++i) {
+        auto* cc = stmt.cases[i];
+        CaseDesc d;
+        d.cc = cc;
+
+        if (!cc->comm) {
+            // default case
+            d.is_default = true;
+            default_index = static_cast<int32_t>(descs.size());
+        } else if (cc->comm->kind == ast::StmtKind::Send) {
+            // send case: ch <- val
+            d.is_send  = true;
+            d.ch_expr  = cc->comm->send.chan;
+            d.val_expr = cc->comm->send.value;
+            d.chan_index = num_chan_cases++;
+        } else if (cc->comm->kind == ast::StmtKind::ShortVarDecl) {
+            // v := <-ch
+            auto& svd = cc->comm->short_var_decl;
+            if (svd.rhs.count > 0 &&
+                svd.rhs[0]->kind == ast::ExprKind::Unary &&
+                svd.rhs[0]->unary.op == TokenKind::Arrow) {
+                d.is_send = false;
+                d.ch_expr = svd.rhs[0]->unary.x;
+                // Pre-alloca receive buffer
+                auto* rhs0_info = expr_info(svd.rhs[0]);
+                IRType* elem_type = (rhs0_info && rhs0_info->type) ? map_sema_type(rhs0_info->type) : type_map_.i64_type();
+                d.recv_buf = builder_.create_alloca(elem_type, "sel.recv.buf");
+                // Bind symbol
+                if (svd.lhs.count > 0 && svd.lhs[0]->kind == ast::ExprKind::Ident) {
+                    d.recv_sym = checker_.decl_symbol(&svd.lhs[0]->ident);
+                }
+                d.chan_index = num_chan_cases++;
+            } else {
+                // Unrecognized comm form — treat as default
+                d.is_default = true;
+                if (default_index < 0) default_index = static_cast<int32_t>(descs.size());
+            }
+        } else if (cc->comm->kind == ast::StmtKind::Assign) {
+            // v = <-ch (existing variable)
+            auto& asgn = cc->comm->assign;
+            if (asgn.rhs.count > 0 &&
+                asgn.rhs[0]->kind == ast::ExprKind::Unary &&
+                asgn.rhs[0]->unary.op == TokenKind::Arrow) {
+                d.is_send = false;
+                d.ch_expr = asgn.rhs[0]->unary.x;
+                auto* rhs_info = expr_info(asgn.rhs[0]);
+                IRType* elem_type = (rhs_info && rhs_info->type) ? map_sema_type(rhs_info->type) : type_map_.i64_type();
+                d.recv_buf = builder_.create_alloca(elem_type, "sel.recv.buf");
+                d.chan_index = num_chan_cases++;
+            } else {
+                d.is_default = true;
+                if (default_index < 0) default_index = static_cast<int32_t>(descs.size());
+            }
+        } else if (cc->comm->kind == ast::StmtKind::Expr) {
+            // Bare receive: <-ch (result discarded)
+            auto* x = cc->comm->expr.x;
+            if (x && x->kind == ast::ExprKind::Unary && x->unary.op == TokenKind::Arrow) {
+                d.is_send = false;
+                d.ch_expr = x->unary.x;
+                d.chan_index = num_chan_cases++;
+            } else {
+                d.is_default = true;
+                if (default_index < 0) default_index = static_cast<int32_t>(descs.size());
+            }
+        } else {
+            d.is_default = true;
+            if (default_index < 0) default_index = static_cast<int32_t>(descs.size());
+        }
+
+        descs.push_back(std::move(d));
+    }
+
+    // ----------------------------------------------------------------
+    // Build the SelectCase array on the stack.
+    // Each entry is 3 QWORDs: {ch_ptr, val_ptr, op}  (24 bytes each).
+    // We use a flat i64 array of size num_chan_cases * 3.
+    // ----------------------------------------------------------------
+    Value* cases_ptr = nullptr;
+    if (num_chan_cases > 0) {
+        IRType* i64_t   = type_map_.i64_type();
+        int64_t arr_len = static_cast<int64_t>(num_chan_cases) * 3;
+        IRType* arr_t   = type_map_.make_array_type(i64_t, arr_len);
+        cases_ptr = builder_.create_alloca(arr_t, "sel.cases");
+
+        // Fill each case entry
+        for (auto& d : descs) {
+            if (d.is_default) continue;
+
+            // Evaluate channel pointer
+            Value* ch = d.ch_expr ? gen_expr(d.ch_expr) : nullptr;
+            if (!ch) ch = builder_.create_const_int(type_map_.ptr_type(), 0);
+
+            // ch_ptr at slot [d.chan_index * 3 + 0]
+            auto* idx_ch  = builder_.create_const_int(i64_t, static_cast<int64_t>(d.chan_index) * 3 + 0);
+            auto* ptr_ch  = builder_.create_getptr(cases_ptr, idx_ch, type_map_.ptr_type(), "sel.ch.ptr");
+            builder_.create_store(ch, ptr_ch);
+
+            // val_ptr at slot [d.chan_index * 3 + 1]
+            auto* idx_val = builder_.create_const_int(i64_t, static_cast<int64_t>(d.chan_index) * 3 + 1);
+            auto* ptr_val = builder_.create_getptr(cases_ptr, idx_val, type_map_.ptr_type(), "sel.val.ptr");
+            if (d.is_send && d.val_expr) {
+                // For send: evaluate and spill the value, store its address
+                Value* send_val = gen_expr(d.val_expr);
+                if (!send_val) send_val = builder_.create_const_int(i64_t, 0);
+                // Spill to an alloca so we have an addressable slot
+                auto* val_alloca = builder_.create_alloca(send_val->type ? send_val->type : i64_t, "sel.send.val");
+                builder_.create_store(send_val, val_alloca);
+                builder_.create_store(val_alloca, ptr_val);
+            } else if (!d.is_send && d.recv_buf) {
+                // For recv-with-assign: store address of recv buffer
+                builder_.create_store(d.recv_buf, ptr_val);
+            } else {
+                // Bare recv or unknown: store null
+                auto* null_val = builder_.create_const_int(type_map_.ptr_type(), 0);
+                builder_.create_store(null_val, ptr_val);
+            }
+
+            // op at slot [d.chan_index * 3 + 2]
+            auto* idx_op  = builder_.create_const_int(i64_t, static_cast<int64_t>(d.chan_index) * 3 + 2);
+            auto* ptr_op  = builder_.create_getptr(cases_ptr, idx_op, type_map_.ptr_type(), "sel.op.ptr");
+            auto* op_val  = builder_.create_const_int(i64_t, d.is_send ? 1 : 0);
+            builder_.create_store(op_val, ptr_op);
+        }
+    } else {
+        // No channel cases — pass a null pointer
+        cases_ptr = builder_.create_const_int(type_map_.ptr_type(), 0);
+    }
+
+    // ----------------------------------------------------------------
+    // Get or create golangc_select function reference
+    // ----------------------------------------------------------------
+    Function* sel_fn = nullptr;
+    {
+        auto it = func_name_map_.find("golangc_select");
+        if (it != func_name_map_.end()) {
+            sel_fn = it->second;
+        } else {
+            // Register a synthetic external function with i64 return type
+            sel_fn = module_->create_function(builder_.next_id(), type_map_.i64_type(), "golangc_select");
+            sel_fn->return_type = type_map_.i64_type();
+            func_name_map_["golangc_select"] = sel_fn;
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Call golangc_select(cases_ptr, num_cases, has_default)
+    // ----------------------------------------------------------------
+    auto* n_val       = builder_.create_const_int(type_map_.i64_type(), num_chan_cases);
+    auto* has_def_val = builder_.create_const_int(type_map_.i64_type(), default_index >= 0 ? 1 : 0);
+    auto* fired_idx   = builder_.create_call(sel_fn, {cases_ptr, n_val, has_def_val},
+                                              type_map_.i64_type(), "sel.fired");
+
+    // ----------------------------------------------------------------
+    // Create basic blocks for each case and merge
+    // ----------------------------------------------------------------
+    auto* merge_bb = current_func_->create_block(fresh_block_name("sel.merge"));
+    loop_stack_.push_back({merge_bb, nullptr}); // break → merge
+
+    std::vector<BasicBlock*> case_bbs;
+    for (size_t i = 0; i < descs.size(); ++i) {
+        case_bbs.push_back(current_func_->create_block(fresh_block_name("sel.case")));
+    }
+
+    // ----------------------------------------------------------------
+    // Branch chain: channel cases first (by chan_index), then default
+    // ----------------------------------------------------------------
+    // For channel cases, fired_idx == chan_index means that case fired.
+    for (auto& d : descs) {
+        if (d.is_default) continue;
+        auto* cmp      = builder_.create_eq(fired_idx,
+                             builder_.create_const_int(type_map_.i64_type(), d.chan_index),
+                             "sel.cmp");
+        auto* next_bb  = current_func_->create_block(fresh_block_name("sel.check"));
+        builder_.create_condbr(cmp, case_bbs[&d - descs.data()], next_bb);
+        builder_.set_insert_block(next_bb);
+    }
+    // Unconditional jump to default case (or merge if no default)
+    if (default_index >= 0) {
+        builder_.create_br(case_bbs[static_cast<size_t>(default_index)]);
+    } else {
+        builder_.create_br(merge_bb);
+    }
+
+    // ----------------------------------------------------------------
+    // Emit case bodies
+    // ----------------------------------------------------------------
+    for (size_t i = 0; i < descs.size(); ++i) {
+        auto& d = descs[i];
+        builder_.set_insert_block(case_bbs[i]);
+
+        // If this is a recv-with-assign case, bind the symbol to recv_buf
+        if (!d.is_default && !d.is_send && d.recv_buf && d.recv_sym) {
+            var_map_[d.recv_sym] = d.recv_buf;
+        }
+
+        // Generate body statements
+        for (auto* s : d.cc->body) {
+            gen_stmt(s);
+        }
+
+        if (!builder_.insert_block()->has_terminator()) {
+            builder_.create_br(merge_bb);
+        }
+    }
+
+    loop_stack_.pop_back();
+    builder_.set_insert_block(merge_bb);
 }
 
 void IRGenerator::gen_send(ast::SendStmt& stmt) {

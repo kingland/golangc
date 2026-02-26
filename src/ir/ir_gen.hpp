@@ -105,6 +105,7 @@ private:
     void gen_for(ast::ForStmt& stmt);
     void gen_range(ast::RangeStmt& stmt);
     void gen_switch(ast::SwitchStmt& stmt);
+    void gen_select(ast::SelectStmt& stmt);
     void gen_inc_dec(ast::IncDecStmt& stmt);
     void gen_send(ast::SendStmt& stmt);
     void gen_go(ast::GoStmt& stmt);

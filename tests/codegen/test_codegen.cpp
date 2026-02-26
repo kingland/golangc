@@ -2341,3 +2341,366 @@ func main() {
     EXPECT_TRUE(contains(result.asm_text, "classify PROC"));
     EXPECT_TRUE(contains(result.asm_text, "grade PROC"));
 }
+
+// ============================================================================
+// Phase 14: Select Statements
+// ============================================================================
+
+TEST(SelectTest, SelectCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int)
+    select {
+    case v := <-ch:
+        println(v)
+    default:
+        println(0)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(SelectTest, SelectCallsSelectRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int)
+    select {
+    case v := <-ch:
+        println(v)
+    default:
+        println(0)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_select"));
+}
+
+TEST(SelectTest, SelectExternDeclared) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int)
+    select {
+    case v := <-ch:
+        println(v)
+    default:
+        println(0)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_select:PROC"));
+}
+
+TEST(SelectTest, SelectDefaultOnly) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    select {
+    default:
+        println(1)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(SelectTest, SelectSingleRecvCase) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int)
+    select {
+    case v := <-ch:
+        println(v)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_select"));
+    EXPECT_TRUE(contains(result.asm_text, "sel$case"));
+}
+
+TEST(SelectTest, SelectRecvAndDefault) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int)
+    select {
+    case v := <-ch:
+        println(v)
+    default:
+        println(99)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // has_default=1 must be passed (constant 1 in asm)
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_select"));
+    EXPECT_TRUE(contains(result.asm_text, "sel$case"));
+    EXPECT_TRUE(contains(result.asm_text, "sel$merge"));
+}
+
+TEST(SelectTest, SelectNoDefaultHasDefaultZero) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int)
+    select {
+    case v := <-ch:
+        println(v)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_select"));
+}
+
+TEST(SelectTest, SelectCaseBodyExecutes) {
+    auto result = compile_to_asm(R"(
+package main
+func producer(ch chan int) {
+    ch <- 42
+}
+func main() {
+    ch := make(chan int)
+    go producer(ch)
+    select {
+    case v := <-ch:
+        println(v)
+    default:
+        println(0)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_select"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(SelectTest, SelectDefaultFires) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int)
+    select {
+    case v := <-ch:
+        println(v)
+    default:
+        println(99)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+TEST(SelectTest, SelectGoFull) {
+    auto result = compile_to_asm(R"(
+package main
+func producer(ch chan int, val int) {
+    ch <- val
+}
+func main() {
+    ch1 := make(chan int)
+    ch2 := make(chan int)
+    go producer(ch1, 10)
+    select {
+    case v := <-ch1:
+        println(v)
+    case v := <-ch2:
+        println(v)
+    default:
+        println(0)
+    }
+    ch3 := make(chan int)
+    select {
+    case v := <-ch3:
+        println(v)
+    default:
+        println(99)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "producer PROC"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+// ============================================================================
+// Phase 15: Variadic Functions
+// ============================================================================
+
+TEST(VariadicTest, VariadicDeclCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+func sum(nums ...int) int {
+    total := 0
+    for _, n := range nums {
+        total = total + n
+    }
+    return total
+}
+func main() { println(sum(1, 2, 3)) }
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(VariadicTest, VariadicCallPacksSlice) {
+    auto result = compile_to_asm(R"(
+package main
+func sum(nums ...int) int {
+    total := 0
+    for _, n := range nums {
+        total = total + n
+    }
+    return total
+}
+func main() { println(sum(1, 2, 3)) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Packing args into a slice uses slice_make and slice_append
+    EXPECT_TRUE(contains(result.asm_text, "call malloc"));
+}
+
+TEST(VariadicTest, VariadicCallZeroArgs) {
+    auto result = compile_to_asm(R"(
+package main
+func sum(nums ...int) int {
+    total := 0
+    for _, n := range nums {
+        total = total + n
+    }
+    return total
+}
+func main() { println(sum()) }
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(VariadicTest, VariadicSpread) {
+    auto result = compile_to_asm(R"(
+package main
+func sum(nums ...int) int {
+    total := 0
+    for _, n := range nums {
+        total = total + n
+    }
+    return total
+}
+func main() {
+    nums := []int{1, 2, 3}
+    println(sum(nums...))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(VariadicTest, VariadicWithFixedParam) {
+    auto result = compile_to_asm(R"(
+package main
+func max(first int, rest ...int) int {
+    m := first
+    for _, n := range rest {
+        if n > m {
+            m = n
+        }
+    }
+    return m
+}
+func main() { println(max(3, 1, 4, 1, 5)) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "max PROC"));
+}
+
+TEST(VariadicTest, VariadicFixedPlusZeroVariadic) {
+    auto result = compile_to_asm(R"(
+package main
+func max(first int, rest ...int) int {
+    return first
+}
+func main() { println(max(42)) }
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(VariadicTest, VariadicRangeOverParam) {
+    auto result = compile_to_asm(R"(
+package main
+func printAll(vals ...int) {
+    for _, v := range vals {
+        println(v)
+    }
+}
+func main() { printAll(10, 20, 30) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(VariadicTest, VariadicCompilesNoTodos) {
+    auto result = compile_to_asm(R"(
+package main
+func sum(nums ...int) int {
+    total := 0
+    for _, n := range nums {
+        total = total + n
+    }
+    return total
+}
+func max(first int, rest ...int) int {
+    m := first
+    for _, n := range rest {
+        if n > m { m = n }
+    }
+    return m
+}
+func main() {
+    println(sum(1, 2, 3))
+    println(sum())
+    nums := []int{4, 5, 6}
+    println(sum(nums...))
+    println(max(3, 1, 4, 1, 5, 9))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+TEST(VariadicTest, VariadicGoFull) {
+    auto result = compile_to_asm(R"(
+package main
+func sum(nums ...int) int {
+    total := 0
+    for _, n := range nums {
+        total = total + n
+    }
+    return total
+}
+func max(first int, rest ...int) int {
+    m := first
+    for _, n := range rest {
+        if n > m { m = n }
+    }
+    return m
+}
+func main() {
+    println(sum(1, 2, 3))
+    println(sum(10, 20, 30, 40))
+    println(sum())
+    nums := []int{4, 5, 6}
+    println(sum(nums...))
+    println(max(3, 1, 4, 1, 5, 9, 2, 6))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "sum PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "max PROC"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}

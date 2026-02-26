@@ -47,6 +47,21 @@ void golangc_string_concat(char* sret_out,
 int64_t golangc_string_eq(const char* ptr1, int64_t len1,
                            const char* ptr2, int64_t len2);
 
+// ---- Select runtime ----
+
+/// One case entry passed to golangc_select (layout must match SelectCase in goroutine_channel.cpp).
+/// op: 0 = recv, 1 = send.
+struct SelectCase {
+    void*   ch;   ///< golangc_chan*
+    void*   val;  ///< send: ptr to value; recv: ptr to output buffer; may be null
+    int64_t op;   ///< 0=recv, 1=send
+};
+
+/// Poll N channel cases non-blockingly.
+/// Returns 0..num_cases-1 for the fired channel case, or num_cases if default fires.
+/// If has_default==0 and no case is ready, blocks until one becomes ready.
+int64_t golangc_select(SelectCase* cases, int64_t num_cases, int64_t has_default);
+
 /// Panic with a message and exit.
 [[noreturn]] void golangc_panic(const char* msg);
 

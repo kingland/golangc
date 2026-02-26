@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 13 (Switch Statements) - Complete
-## Current Milestone: Phase 13 complete - StringEq opcode, fallthrough, string switch fix, 12 new tests — switch.go sample added (142 codegen tests, 529 total)
-## Completion Estimate: Phase 13 ~100%
+## Current Phase: 15 (Variadic Functions) - Complete
+## Current Milestone: Phase 15 complete - variadic `...T` params, call-site slice packing, spread (`args...`) pass-through, sema fixes (spread type check + unused param false positive), 9 new tests — variadic.go sample added (161 codegen tests, 548 total)
+## Completion Estimate: Phase 15 ~100%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -12,10 +12,10 @@
 | Lexer | ✅ Complete | 89 | All Go tokens, literals, operators, comments, auto-semicolons |
 | AST | ✅ Complete | - | Full node hierarchy (16 expr, 21 stmt, 7 decl, 13 type kinds) |
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T in call args fixed |
-| Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction |
-| IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq |
-| CodeGen | ✅ Complete | 142 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough) |
-| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq |
+| Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction; spread type check fix; unused param false positive fix |
+| IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq, make_array_type public |
+| CodeGen | ✅ Complete | 161 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread) |
+| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
@@ -725,3 +725,42 @@
 #### Next Steps
 - **Phase 14**: `select` statement for channel multiplexing; or `fmt` package import system; or type switches
 - **Future**: Direct PE generation, buffered channels, GC, self-hosting
+
+### Session 14 - Phase 14: Select Statement
+#### Completed
+- **`golangc_select` runtime** (`src/runtime/goroutine_channel.cpp`, `runtime.hpp`): `SelectCase` struct `{ch*, val*, op}` (3 QWORDs); `golangc_select(cases, num_cases, has_default)` polls recv/send cases non-blockingly; returns fired case index (0..N-1) or N for default; 1ms Sleep backoff when blocking with no default; approximated non-blocking send (5ms timeout)
+- **`make_array_type` public** (`src/ir/ir_type_map.hpp`): Moved from private section to public so IR gen can allocate typed flat arrays for the SelectCase stack buffer; removed duplicate private declaration
+- **`gen_select`** (`src/ir/ir_gen_stmt.cpp`, `src/ir/ir_gen.hpp`): Full implementation classifying CommClauses (default/send/recv-assign/bare-recv), allocating flat `i64[N*3]` array on stack, filling `{ch_ptr, val_ptr, op}` via GetPtr+Store for each channel case, registering `golangc_select` as synthetic IR Function* in `func_name_map_`, calling it, building CondBr dispatch chain, emitting case bodies with recv-sym binding; break → merge via `loop_stack_`
+- **`StmtKind::Select` dispatch** in `gen_stmt()` switch case
+- **`EXTERN golangc_select:PROC`** added to `emit_module_header` (`x64_codegen.cpp`)
+- **`samples/select.go`**: New sample: two-way recv select (goroutine sends on ch1), default branch, direct recv — 3 outputs
+- **10 new codegen tests** (142→152): `SelectCompilesNoErrors`, `SelectCallsSelectRuntime`, `SelectExternDeclared`, `SelectDefaultOnly`, `SelectSingleRecvCase`, `SelectRecvAndDefault`, `SelectNoDefaultHasDefaultZero`, `SelectCaseBodyExecutes`, `SelectDefaultFires`, `SelectGoFull`
+
+#### Current State
+- All 10 samples compile (hello, fibonacci, structs, interfaces, maps, wordfreq, goroutines, defer, closures, switch, select)
+- All 539 total tests pass (30+89+87+110+71+152)
+- `select` with recv cases and `default` works end-to-end
+- Known limitation: non-blocking send in `select` uses best-effort 5ms poll; multi-goroutine send-select patterns are approximate
+
+#### Next Steps
+- **Phase 15**: Variadic functions (`...T` params, `args...` spread) — unblocks many real Go patterns
+- **Phase 16**: Type switches (`switch x.(type)`)
+- **Future**: `fmt` package import system, buffered channels, GC, self-hosting
+
+### Session 15 - Phase 15: Variadic Functions
+#### Completed
+- **`gen_call` variadic expansion** (`src/ir/ir_gen_expr.cpp`): Detects variadic callees via `callee_sema_func->is_variadic`; for normal calls packs trailing arguments into a `[]T` slice via `SliceMake`+`SliceAppend` chain; for spread calls (`f(s...)`) passes the last argument (already a slice) directly without wrapping; fixed param count computed as `params.size() - 1` for variadic functions
+- **Sema fix — spread type check** (`src/sema/checker_expr.cpp`): In `check_call`, added `is_spread_arg` guard: when `expr.has_ellipsis && i == expr.args.count - 1`, skip unwrapping variadic param `[]T` → `T`; prevents false type-mismatch error on `f(s...)`
+- **Sema fix — unused params** (`src/sema/checker_decl.cpp`): In `check_func_decl` and `check_method`, mark every parameter symbol `psym->used = true` immediately after declaration; Go's "declared and not used" rule applies only to local variables, not function parameters
+- **`samples/variadic.go`**: New sample: `sum(...int) int` (for-range body), `max(first int, rest ...int) int` (fixed+variadic), calls with 0/many args and spread (`nums...`)
+- **9 new codegen tests** (152→161): `VariadicDeclCompilesNoErrors`, `VariadicCallPacksSlice`, `VariadicCallZeroArgs`, `VariadicSpread`, `VariadicWithFixedParam`, `VariadicFixedPlusZeroVariadic`, `VariadicRangeOverParam`, `VariadicCompilesNoTodos`, `VariadicGoFull`
+
+#### Current State
+- All 11 samples compile (hello, fibonacci, structs, interfaces, maps, wordfreq, goroutines, defer, closures, switch, select, variadic)
+- All 548 total tests pass (30+89+87+110+71+161)
+- Variadic functions work end-to-end: pack, spread, fixed+variadic, zero-arg all correct
+
+#### Next Steps
+- **Phase 16**: Type switches (`switch x.(type)`) — needed for interface dispatch patterns
+- **Phase 17**: Named types / type aliases, method sets on named types
+- **Future**: `fmt` package import system, buffered channels, GC, self-hosting

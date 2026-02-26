@@ -455,7 +455,19 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
         }
     }
 
+    // Determine variadic info for this call
+    bool callee_is_variadic = callee_sema_func && callee_sema_func->is_variadic;
+    // Number of fixed (non-variadic) params (receiver already consumed from args if present)
+    uint32_t fixed_param_count = callee_sema_func
+        ? static_cast<uint32_t>(callee_sema_func->params.size()) - (callee_is_variadic ? 1 : 0)
+        : call.args.count;
+    // Adjust for receiver already in args
+    uint32_t receiver_offset = receiver ? 1u : 0u;
+
     for (uint32_t i = 0; i < call.args.count; ++i) {
+        // For variadic calls, stop the normal loop at the last fixed param
+        if (callee_is_variadic && i >= fixed_param_count) break;
+
         auto* arg = gen_expr(call.args[i]);
         if (!arg) continue;
 
@@ -466,13 +478,54 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
             if (param_type && param_type->kind == sema::TypeKind::Interface &&
                 arg_info && arg_info->type &&
                 sema::underlying(arg_info->type)->kind != sema::TypeKind::Interface) {
-                // Box the concrete value into an interface: InterfaceMake(type_tag, value)
                 auto* type_tag = builder_.create_const_int(type_map_.i64_type(), 1, "type.tag");
                 arg = builder_.create_interface_make(type_tag, arg, "iface");
             }
         }
         args.push_back(arg);
     }
+
+    // Handle variadic trailing arguments
+    if (callee_is_variadic) {
+        // Determine element type of the variadic slice param
+        IRType* elem_type = type_map_.i64_type();
+        IRType* slice_type = type_map_.slice_type();
+        auto& last_param = callee_sema_func->params.back();
+        if (last_param.type && last_param.type->kind == sema::TypeKind::Slice) {
+            elem_type = map_sema_type(last_param.type->slice.element);
+            slice_type = map_sema_type(last_param.type);
+        }
+
+        if (call.has_ellipsis && call.args.count > 0) {
+            // Spread: f(s...) — pass the slice directly
+            auto* spread_arg = gen_expr(call.args[call.args.count - 1]);
+            if (spread_arg) args.push_back(spread_arg);
+        } else {
+            // Pack trailing args into a new slice
+            uint32_t variadic_count = call.args.count > fixed_param_count
+                ? call.args.count - fixed_param_count : 0;
+            auto* len_val = builder_.create_const_int(type_map_.i64_type(),
+                                                       static_cast<int64_t>(variadic_count), "var.len");
+            auto* slice = builder_.create_slice_make(slice_type, len_val, len_val, "var.slice");
+
+            for (uint32_t i = fixed_param_count; i < call.args.count; ++i) {
+                auto* elem = gen_expr(call.args[i]);
+                if (!elem) continue;
+                // Interface-box if needed
+                if (elem_type && elem_type->kind == IRTypeKind::Struct) { // interface layout
+                    auto* arg_info = expr_info(call.args[i]);
+                    if (arg_info && arg_info->type &&
+                        sema::underlying(arg_info->type)->kind != sema::TypeKind::Interface) {
+                        auto* type_tag = builder_.create_const_int(type_map_.i64_type(), 1, "type.tag");
+                        elem = builder_.create_interface_make(type_tag, elem, "iface");
+                    }
+                }
+                slice = builder_.create_slice_append(slice, elem, elem_type, "var.append");
+            }
+            args.push_back(slice);
+        }
+    }
+    (void)receiver_offset;
 
     // For indirect calls (function-typed variables / closures), append the env ptr.
     // Direct IR Function* calls are never fat closures.

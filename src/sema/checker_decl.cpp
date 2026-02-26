@@ -137,6 +137,9 @@ void Checker::check_func_decl(ast::FuncDecl& decl) {
                 if (!param.name.empty() && param.name != "_") {
                     auto* psym = declare(SymbolKind::Var, param.name, param.type,
                                          decl.loc);
+                    // Parameters are always considered "used" — they are part of the
+                    // function signature and Go only requires locals to be used.
+                    if (psym) psym->used = true;
                     // Record decl_sym_map_ for IR generator
                     if (psym && decl.type && decl.type->params) {
                         size_t ast_idx = 0;
@@ -237,6 +240,7 @@ void Checker::check_method(ast::FuncDecl& decl) {
                 if (!param.name.empty() && param.name != "_") {
                     auto* psym = declare(SymbolKind::Var, param.name, param.type,
                                          decl.loc);
+                    if (psym) psym->used = true;
                     if (psym && decl.type && decl.type->params) {
                         size_t ast_idx = 0;
                         for (auto* field : decl.type->params->fields) {
