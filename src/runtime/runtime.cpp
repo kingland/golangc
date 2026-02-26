@@ -5,6 +5,10 @@
 #include <cstring>
 #include <cstdint>
 
+// Global closure environment pointer — set by ClosureMake before calling Ret,
+// read at indirect call sites to pass as hidden env arg.
+extern "C" void* golangc_closure_env = nullptr;
+
 extern "C" {
 
 void golangc_println_int(int64_t value) {

@@ -36,6 +36,9 @@ public:
     /// Get the interface layout type: {ptr, ptr}
     [[nodiscard]] IRType* interface_type() const { return iface_; }
 
+    /// Get the fat-closure layout type: {func_ptr, env_ptr} = {ptr, ptr}
+    [[nodiscard]] IRType* closure_type() const { return iface_; } // same layout as iface
+
     /// Get size in bytes of an IR type (for map key/value sizing).
     [[nodiscard]] static int64_t type_size(const IRType* t);
 

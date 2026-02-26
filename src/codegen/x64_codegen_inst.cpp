@@ -97,6 +97,11 @@ void X64CodeGenerator::emit_instruction(const ir::Instruction& inst,
         case ir::Opcode::GoSpawn:   emit_go_spawn(inst);   break;
         case ir::Opcode::SliceMake: emit_slice_make(inst); break;
 
+        // Closures
+        case ir::Opcode::ClosureMake: emit_closure_make(inst); break;
+        case ir::Opcode::ClosureEnv:  emit_closure_env(inst);  break;
+        case ir::Opcode::Malloc:      emit_malloc(inst);        break;
+
         // Map operations
         case ir::Opcode::MapMake:     emit_map_make(inst);     break;
         case ir::Opcode::MapGet:      emit_map_get(inst);      break;
@@ -254,6 +259,7 @@ void X64CodeGenerator::emit_load(const ir::Instruction& inst) {
         emit(fmt::format("mov rax, QWORD PTR [rbp{}]", temp_slots_[ptr->id]));
         emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
     }
+
 }
 
 void X64CodeGenerator::emit_store(const ir::Instruction& inst) {
@@ -334,6 +340,7 @@ void X64CodeGenerator::emit_store(const ir::Instruction& inst) {
     } else if (temp_slots_.count(ptr->id)) {
         emit(fmt::format("mov QWORD PTR [rbp{}], rax", temp_slots_[ptr->id]));
     }
+
 }
 
 void X64CodeGenerator::emit_getptr(const ir::Instruction& inst) {
@@ -530,6 +537,11 @@ void X64CodeGenerator::emit_condbr(const ir::Instruction& inst) {
 }
 
 void X64CodeGenerator::emit_ret(const ir::Instruction& inst, const ir::Function& func) {
+    // Stash return value computation before running defers (LIFO order)
+    // We save the return value first, then run defers, then actually return.
+    // For simplicity: compute + stash ret val in its existing slot, run defers, emit epilogue.
+
+    // --- Compute return value (store in slot if applicable) ---
     if (!inst.operands.empty()) {
         auto* ret_val = inst.operands[0];
 
@@ -557,18 +569,97 @@ void X64CodeGenerator::emit_ret(const ir::Instruction& inst, const ir::Function&
                 emit(fmt::format("mov rax, QWORD PTR [rbp{}]", src_off));
                 emit(fmt::format("mov QWORD PTR [rcx+{}], rax", q * 8));
             }
-            // Return the sret pointer in RAX (Windows x64 convention)
-            emit(fmt::format("mov rax, QWORD PTR [rbp{}]", sret_slot_));
+            // Stash sret pointer in RAX slot — will be reloaded after defers
         } else if (ret_val->type && is_float_type(ret_val->type)) {
-            // Float return in XMM0
             load_value_to_xmm(ret_val, X64Reg::XMM0);
         } else {
             load_value_to_rax(ret_val);
+            // Stash scalar return in a hidden frame slot so defers can clobber RAX
+            if (!defers_.empty()) {
+                // Use a fixed hidden slot (ret_stash id = 400000)
+                constexpr uint32_t ret_stash_id = 400000;
+                int32_t stash_off = 0;
+                auto it = temp_slots_.find(ret_stash_id);
+                if (it != temp_slots_.end()) {
+                    stash_off = it->second;
+                } else {
+                    stash_off = frame_.allocate(ret_stash_id, 8);
+                    temp_slots_[ret_stash_id] = stash_off;
+                }
+                emit(fmt::format("mov QWORD PTR [rbp{}], rax", stash_off));
+            }
+        }
+    } else if (!defers_.empty()) {
+        // void return — nothing to stash, just zero RAX after defers
+    }
+
+    // --- Replay defers LIFO ---
+    if (!defers_.empty()) {
+        for (int i = static_cast<int>(defers_.size()) - 1; i >= 0; --i) {
+            const auto* d = defers_[i];
+            // d is a DeferCall instruction: operands[0]=callee, operands[1..]=args
+            auto* callee_val = d->operands[0];
+            auto* callee_fn  = dynamic_cast<const ir::Function*>(callee_val);
+
+            // Marshal args into registers — same logic as emit_call.
+            // Large structs (e.g. strings) are passed by pointer to their stack slot.
+            size_t num_args  = d->operands.size() - 1;
+            size_t reg_offset = 0; // no sret for deferred calls currently
+            for (size_t j = 0; j < num_args && (j + reg_offset) < kMaxRegArgs; ++j) {
+                auto* arg = d->operands[j + 1];
+                if (arg->type && is_large_struct(arg->type)) {
+                    int32_t arg_slot = 0;
+                    if (temp_slots_.count(arg->id))       arg_slot = temp_slots_[arg->id];
+                    else if (frame_.has_slot(arg->id))    arg_slot = frame_.offset_of(arg->id);
+                    emit(fmt::format("lea {}, [rbp{}]",
+                                     reg_name(kArgRegs[j + reg_offset]), arg_slot));
+                } else if (arg->type && is_float_type(arg->type)) {
+                    static constexpr X64Reg kXmmArgs[] = {
+                        X64Reg::XMM0, X64Reg::XMM1, X64Reg::XMM2, X64Reg::XMM3};
+                    load_value_to_xmm(arg, kXmmArgs[j + reg_offset]);
+                } else {
+                    load_value_to_reg(arg, kArgRegs[j + reg_offset]);
+                }
+            }
+
+            emit(fmt::format("sub rsp, {}", kShadowSpace));
+            if (callee_fn) {
+                emit(fmt::format("call {}", masm_name(callee_fn->name)));
+            } else {
+                load_value_to_reg(callee_val, X64Reg::R10);
+                emit("call r10");
+            }
+            emit(fmt::format("add rsp, {}", kShadowSpace));
+        }
+
+        // Restore return value from stash if needed
+        if (!inst.operands.empty()) {
+            auto* ret_val = inst.operands[0];
+            if (ret_val->type && !is_large_struct(ret_val->type) && !is_float_type(ret_val->type)) {
+                constexpr uint32_t ret_stash_id = 400000;
+                auto it = temp_slots_.find(ret_stash_id);
+                if (it != temp_slots_.end()) {
+                    emit(fmt::format("mov rax, QWORD PTR [rbp{}]", it->second));
+                }
+            } else if (has_sret_) {
+                emit(fmt::format("mov rax, QWORD PTR [rbp{}]", sret_slot_));
+            }
+        } else {
+            emit("xor eax, eax");
         }
     } else {
-        // Void return — zero RAX so main() returns 0 as process exit code
-        emit("xor eax, eax");
+        // No defers — straightforward return value setup
+        if (inst.operands.empty()) {
+            emit("xor eax, eax");
+        } else {
+            auto* ret_val = inst.operands[0];
+            if (has_sret_ && ret_val->type && is_large_struct(ret_val->type)) {
+                emit(fmt::format("mov rax, QWORD PTR [rbp{}]", sret_slot_));
+            }
+            // scalar/float already in rax/xmm0 from above
+        }
     }
+
     emit_epilogue();
     (void)func;
 }
@@ -1494,6 +1585,48 @@ void X64CodeGenerator::emit_map_set(const ir::Instruction& inst) {
     emit("sub rsp, 32");
     emit("call golangc_map_set");
     emit("add rsp, 32");
+}
+
+// ============================================================================
+// Closure operations
+// ============================================================================
+
+// emit_closure_make: store func_ptr to result slot, env_ptr to global golangc_closure_env.
+// The global allows the call site to retrieve env without modifying calling convention.
+// operands[0] = func_ptr (Function*), operands[1] = env_ptr (possibly ConstNil).
+void X64CodeGenerator::emit_closure_make(const ir::Instruction& inst) {
+    auto slot = get_temp_slot(inst.id);
+
+    // Store func_ptr
+    load_value_to_reg(inst.operands[0], X64Reg::RAX);
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+
+    // Store env_ptr to global golangc_closure_env
+    if (inst.operands.size() > 1) {
+        load_value_to_reg(inst.operands[1], X64Reg::RAX);
+    } else {
+        emit("xor eax, eax"); // null env
+    }
+    emit("mov QWORD PTR [golangc_closure_env], rax");
+}
+
+// emit_closure_env: load env_ptr from global golangc_closure_env.
+// The env was stored there by the most recent ClosureMake or function-return
+// of a closure-valued expression.
+void X64CodeGenerator::emit_closure_env(const ir::Instruction& inst) {
+    auto slot = get_temp_slot(inst.id);
+    emit("mov rax, QWORD PTR [golangc_closure_env]");
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+}
+
+// emit_malloc: call malloc(size) → ptr
+void X64CodeGenerator::emit_malloc(const ir::Instruction& inst) {
+    auto slot = get_temp_slot(inst.id);
+    load_value_to_reg(inst.operands[0], X64Reg::RCX);
+    emit(fmt::format("sub rsp, {}", kShadowSpace));
+    emit("call malloc");
+    emit(fmt::format("add rsp, {}", kShadowSpace));
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
 }
 
 // ============================================================================

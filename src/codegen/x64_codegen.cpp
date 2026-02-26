@@ -163,6 +163,7 @@ void X64CodeGenerator::emit_module_header(const ir::Module& module) {
     out_ += "EXTERN golangc_map_iter_free:PROC\n";
     out_ += "EXTERN golangc_slice_append:PROC\n";
     out_ += "EXTERN malloc:PROC\n";
+    out_ += "EXTERN golangc_closure_env:QWORD\n";
     emit_blank();
 }
 
@@ -214,6 +215,8 @@ void X64CodeGenerator::emit_module_footer() {
 void X64CodeGenerator::emit_function(const ir::Function& func) {
     frame_.reset();
     temp_slots_.clear();
+    defers_.clear();
+    closure_env_slots_.clear();
     current_func_ = &func;
     has_sret_ = false;
     sret_slot_ = 0;
@@ -350,6 +353,24 @@ void X64CodeGenerator::scan_allocas(const ir::Function& func) {
 }
 
 void X64CodeGenerator::prescan_temps(const ir::Function& func) {
+    // If the function contains any DeferCall, pre-allocate the ret-stash slot
+    // (used to preserve the return value across deferred calls at ret sites).
+    bool has_defer = false;
+    for (const auto& block : func.blocks) {
+        for (const auto& inst : block->instructions) {
+            if (inst->opcode == ir::Opcode::DeferCall) { has_defer = true; break; }
+        }
+        if (has_defer) break;
+    }
+    if (has_defer) {
+        constexpr uint32_t ret_stash_id = 400000;
+        if (temp_slots_.find(ret_stash_id) == temp_slots_.end() &&
+            !frame_.has_slot(ret_stash_id)) {
+            int32_t off = frame_.allocate(ret_stash_id, 8);
+            temp_slots_[ret_stash_id] = off;
+        }
+    }
+
     // Pre-allocate temp stack slots for every value-producing instruction
     // so the frame size is fully known before the prologue is emitted.
     for (const auto& block : func.blocks) {
@@ -440,6 +461,9 @@ void X64CodeGenerator::prescan_temps(const ir::Function& func) {
                     temp_slots_[ok_id] = ok_off;
                 }
             }
+
+            // Note: ClosureMake uses {ptr, ptr} struct type, so the prescan struct
+            // aliasing logic above (q=1 alias at id+100000) handles the env slot.
         }
     }
 }

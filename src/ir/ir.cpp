@@ -128,6 +128,9 @@ namespace ir {
         case Opcode::MapIterMake:    return "map_iter_make";
         case Opcode::MapIterNext:    return "map_iter_next";
         case Opcode::MapIterFree:    return "map_iter_free";
+        case Opcode::ClosureMake:    return "closure_make";
+        case Opcode::ClosureEnv:     return "closure_env";
+        case Opcode::Malloc:         return "malloc";
         case Opcode::StringLen:      return "string_len";
         case Opcode::StringIndex:    return "string_index";
         case Opcode::StringConcat:   return "string_concat";

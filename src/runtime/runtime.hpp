@@ -105,3 +105,8 @@ void golangc_chan_recv(golangc_chan* ch, void* out_ptr);
 void golangc_go_spawn(void* func_ptr, int64_t arg_count, ...);
 
 } // extern "C"
+
+/// Global closure env pointer — set by ClosureMake, read at indirect call sites.
+/// Allows closures to pass captured environment without modifying calling convention.
+/// NOT thread-safe; adequate for single-threaded programs.
+extern "C" void* golangc_closure_env;

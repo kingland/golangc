@@ -8,6 +8,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace golangc {
@@ -41,6 +42,7 @@ private:
 
     Function* current_func_ = nullptr;
     uint32_t block_counter_ = 0;
+    uint32_t func_lit_counter_ = 0;  // Unique suffix for func literal names
 
     // ---- Helpers ----
     std::string fresh_block_name(const std::string& prefix);
@@ -78,6 +80,17 @@ private:
     Value* gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func_info);
     Value* gen_logical_and(ast::Expr* expr);
     Value* gen_logical_or(ast::Expr* expr);
+
+    // Collect all symbols referenced in `stmt_or_expr` that are captured from
+    // the enclosing scope (present in outer_map but not in inner_params).
+    void collect_captures(ast::Stmt* stmt,
+                          const std::unordered_map<const sema::Symbol*, Value*>& outer_map,
+                          const std::unordered_set<const sema::Symbol*>& inner_params,
+                          std::vector<const sema::Symbol*>& captures);
+    void collect_captures_expr(ast::Expr* expr,
+                               const std::unordered_map<const sema::Symbol*, Value*>& outer_map,
+                               const std::unordered_set<const sema::Symbol*>& inner_params,
+                               std::vector<const sema::Symbol*>& captures);
 
     // ---- Statement generation (ir_gen_stmt.cpp) ----
     void gen_stmt(ast::Stmt* stmt);

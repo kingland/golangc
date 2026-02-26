@@ -560,6 +560,38 @@ Instruction* IRBuilder::create_map_iter_free(Value* iter) {
 }
 
 // ============================================================================
+// Closures
+// ============================================================================
+
+Instruction* IRBuilder::create_closure_make(Value* func_ptr, Value* env_ptr,
+                                             const std::string& name) {
+    auto* inst = emit(Opcode::ClosureMake, type_map_.ptr_type(), name);
+    // operands[0] = func_ptr, operands[1] = env_ptr (ConstNil if non-capturing)
+    if (!env_ptr) {
+        auto* nil = emit(Opcode::ConstNil, type_map_.ptr_type(), "env.nil");
+        env_ptr = nil;
+    }
+    inst->operands = {func_ptr, env_ptr};
+    return inst;
+}
+
+Instruction* IRBuilder::create_closure_env(Value* closure_val, const std::string& name) {
+    auto* inst = emit(Opcode::ClosureEnv, type_map_.ptr_type(), name);
+    inst->operands = {closure_val};
+    return inst;
+}
+
+// ============================================================================
+// Heap allocation
+// ============================================================================
+
+Instruction* IRBuilder::create_malloc(Value* size, const std::string& name) {
+    auto* inst = emit(Opcode::Malloc, type_map_.ptr_type(), name);
+    inst->operands = {size};
+    return inst;
+}
+
+// ============================================================================
 // Extended slice operations
 // ============================================================================
 

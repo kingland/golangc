@@ -468,6 +468,14 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
         args.push_back(arg);
     }
 
+    // For indirect calls (function-typed variables / closures), append the env ptr.
+    // Direct IR Function* calls are never fat closures.
+    bool is_indirect = (dynamic_cast<const ir::Function*>(callee) == nullptr);
+    if (is_indirect && !is_interface_call) {
+        auto* env = builder_.create_closure_env(callee, ".env");
+        args.push_back(env);
+    }
+
     auto* call_info = expr_info(expr);
     IRType* result_type = type_map_.void_type();
     if (call_info && call_info->type) result_type = map_sema_type(call_info->type);
@@ -603,8 +611,306 @@ Value* IRGenerator::gen_type_assert(ast::Expr* expr) {
     return builder_.create_interface_data(iface, result_type, "assert");
 }
 
-Value* IRGenerator::gen_func_lit(ast::Expr* /*expr*/) {
-    return builder_.create_const_nil(type_map_.ptr_type(), "closure.todo");
+// ---------------------------------------------------------------------------
+// Capture collection helpers
+// ---------------------------------------------------------------------------
+
+void IRGenerator::collect_captures_expr(
+        ast::Expr* expr,
+        const std::unordered_map<const sema::Symbol*, Value*>& outer_map,
+        const std::unordered_set<const sema::Symbol*>& inner_params,
+        std::vector<const sema::Symbol*>& captures) {
+    if (!expr) return;
+    switch (expr->kind) {
+        case ast::ExprKind::Ident: {
+            auto* info = expr_info(expr);
+            if (info && info->symbol) {
+                auto* sym = info->symbol;
+                if (inner_params.count(sym)) break; // own param
+                if (outer_map.count(sym)) {
+                    // Check not already added
+                    bool found = false;
+                    for (auto* c : captures) if (c == sym) { found = true; break; }
+                    if (!found) captures.push_back(sym);
+                }
+            }
+            break;
+        }
+        case ast::ExprKind::Binary:
+            collect_captures_expr(expr->binary.left, outer_map, inner_params, captures);
+            collect_captures_expr(expr->binary.right, outer_map, inner_params, captures);
+            break;
+        case ast::ExprKind::Unary:
+        case ast::ExprKind::Star:
+            collect_captures_expr(expr->unary.x, outer_map, inner_params, captures);
+            break;
+        case ast::ExprKind::Paren:
+            collect_captures_expr(expr->paren.x, outer_map, inner_params, captures);
+            break;
+        case ast::ExprKind::Call:
+            collect_captures_expr(expr->call.func, outer_map, inner_params, captures);
+            for (auto* a : expr->call.args)
+                collect_captures_expr(a, outer_map, inner_params, captures);
+            break;
+        case ast::ExprKind::Selector:
+            collect_captures_expr(expr->selector.x, outer_map, inner_params, captures);
+            break;
+        case ast::ExprKind::Index:
+            collect_captures_expr(expr->index.x, outer_map, inner_params, captures);
+            collect_captures_expr(expr->index.index, outer_map, inner_params, captures);
+            break;
+        case ast::ExprKind::KeyValue:
+            collect_captures_expr(expr->key_value.key, outer_map, inner_params, captures);
+            collect_captures_expr(expr->key_value.value, outer_map, inner_params, captures);
+            break;
+        case ast::ExprKind::CompositeLit:
+            for (auto* e : expr->composite_lit.elts)
+                collect_captures_expr(e, outer_map, inner_params, captures);
+            break;
+        case ast::ExprKind::FuncLit:
+            // Don't recurse into nested func lits — they'll handle their own captures
+            break;
+        default: break;
+    }
+}
+
+void IRGenerator::collect_captures(
+        ast::Stmt* stmt,
+        const std::unordered_map<const sema::Symbol*, Value*>& outer_map,
+        const std::unordered_set<const sema::Symbol*>& inner_params,
+        std::vector<const sema::Symbol*>& captures) {
+    if (!stmt) return;
+    switch (stmt->kind) {
+        case ast::StmtKind::Block:
+            for (auto* s : stmt->block.stmts.span())
+                collect_captures(s, outer_map, inner_params, captures);
+            break;
+        case ast::StmtKind::Return:
+            for (auto* v : stmt->return_.results.span())
+                collect_captures_expr(v, outer_map, inner_params, captures);
+            break;
+        case ast::StmtKind::Expr:
+            collect_captures_expr(stmt->expr.x, outer_map, inner_params, captures);
+            break;
+        case ast::StmtKind::Assign:
+            for (auto* l : stmt->assign.lhs.span())
+                collect_captures_expr(l, outer_map, inner_params, captures);
+            for (auto* r : stmt->assign.rhs.span())
+                collect_captures_expr(r, outer_map, inner_params, captures);
+            break;
+        case ast::StmtKind::ShortVarDecl:
+            for (auto* r : stmt->short_var_decl.rhs.span())
+                collect_captures_expr(r, outer_map, inner_params, captures);
+            break;
+        case ast::StmtKind::If:
+            collect_captures(stmt->if_.body, outer_map, inner_params, captures);
+            collect_captures(stmt->if_.else_body, outer_map, inner_params, captures);
+            collect_captures_expr(stmt->if_.cond, outer_map, inner_params, captures);
+            break;
+        case ast::StmtKind::For:
+            collect_captures_expr(stmt->for_.cond, outer_map, inner_params, captures);
+            collect_captures(stmt->for_.body, outer_map, inner_params, captures);
+            break;
+        case ast::StmtKind::IncDec:
+            collect_captures_expr(stmt->inc_dec.x, outer_map, inner_params, captures);
+            break;
+        default: break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// gen_func_lit
+// ---------------------------------------------------------------------------
+
+Value* IRGenerator::gen_func_lit(ast::Expr* expr) {
+    // Generate a func literal as a nested top-level function.
+    // If the body captures variables from the enclosing scope, malloc an env
+    // struct, store captures into it, and pass it as a hidden last parameter.
+    auto& fl = expr->func_lit;
+    if (!fl.body) return builder_.create_const_nil(type_map_.ptr_type(), "closure.nil");
+
+    // Build a unique name: <enclosing>$lit<N>
+    std::string parent_name = current_func_ ? current_func_->name : "anon";
+    std::string lit_name = parent_name + "$lit" + std::to_string(func_lit_counter_++);
+
+    // Resolve the func literal's type (from sema)
+    const auto* info = expr_info(expr);
+    sema::Type* sema_ft = info ? info->type : nullptr;
+
+    // Create an IR function for the literal
+    IRType* ir_func_type = sema_ft ? map_sema_type(sema_ft) : type_map_.void_type();
+    auto* lit_func = module_->create_function(builder_.next_id(), ir_func_type, lit_name);
+
+    // Determine return type
+    if (sema_ft && sema_ft->kind == sema::TypeKind::Func && sema_ft->func) {
+        if (sema_ft->func->results.size() == 1) {
+            lit_func->return_type = map_sema_type(sema_ft->func->results[0].type);
+        } else if (sema_ft->func->results.size() > 1) {
+            std::vector<IRType*> ret_fields;
+            for (const auto& r : sema_ft->func->results)
+                ret_fields.push_back(map_sema_type(r.type));
+            lit_func->return_type = type_map_.make_tuple_type(std::move(ret_fields));
+        } else {
+            lit_func->return_type = type_map_.void_type();
+        }
+    } else {
+        lit_func->return_type = type_map_.void_type();
+    }
+
+    // ------------------------------------------------------------------
+    // Collect captured variables (outer-scope vars referenced in body)
+    // ------------------------------------------------------------------
+    // Build the set of inner param symbols first
+    std::unordered_set<const sema::Symbol*> inner_param_syms;
+    if (fl.type && fl.type->func.params) {
+        for (auto* field : fl.type->func.params->fields) {
+            for (auto* name_node : field->names) {
+                if (name_node) {
+                    auto* sym = checker_.decl_symbol(name_node);
+                    if (sym) inner_param_syms.insert(sym);
+                }
+            }
+        }
+    }
+
+    std::vector<const sema::Symbol*> captures;
+    if (fl.body) {
+        collect_captures(fl.body, var_map_, inner_param_syms, captures);
+    }
+
+    // Save current generation context
+    auto* saved_func      = current_func_;
+    auto  saved_var_map   = var_map_;
+    auto  saved_loops     = loop_stack_;
+    auto  saved_counter   = block_counter_;
+    auto* saved_block     = builder_.insert_block();
+
+    // Set up context for the literal body (start fresh — no outer vars directly)
+    current_func_ = lit_func;
+    block_counter_ = 0;
+    loop_stack_.clear();
+    var_map_.clear();   // inner function has its own scope
+
+    auto* entry = lit_func->create_block("entry");
+    builder_.set_insert_block(entry);
+
+    // Bind explicit parameters from the sema type
+    if (sema_ft && sema_ft->kind == sema::TypeKind::Func && sema_ft->func) {
+        const auto& params = sema_ft->func->params;
+        size_t param_idx = 0;
+        if (fl.type && fl.type->func.params) {
+            for (auto* field : fl.type->func.params->fields) {
+                if (param_idx >= params.size()) break;
+                if (field->names.count > 0) {
+                    for (auto* name_ident : field->names) {
+                        if (param_idx >= params.size()) break;
+                        IRType* pt = map_sema_type(params[param_idx].type);
+                        auto pval = std::make_unique<Value>(builder_.next_id(), pt);
+                        pval->name = name_ident ? std::string(name_ident->name) : "p";
+                        auto* pv = pval.get();
+                        lit_func->params.push_back(std::move(pval));
+                        auto* alloca_p = builder_.create_alloca(pt, pv->name + ".addr");
+                        builder_.create_store(pv, alloca_p);
+                        if (name_ident) {
+                            auto* sym = checker_.decl_symbol(name_ident);
+                            if (sym) var_map_[sym] = alloca_p;
+                        }
+                        ++param_idx;
+                    }
+                } else {
+                    IRType* pt = map_sema_type(params[param_idx].type);
+                    auto pval = std::make_unique<Value>(builder_.next_id(), pt);
+                    pval->name = "p";
+                    lit_func->params.push_back(std::move(pval));
+                    ++param_idx;
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // If there are captures, add env ptr as hidden last param, then load
+    // each capture from env[i*8].
+    // ------------------------------------------------------------------
+    Value* env_ptr_val = nullptr; // allocated in outer function, below
+
+    if (!captures.empty()) {
+        lit_func->has_env = true;
+
+        // Add hidden env param
+        auto env_pval = std::make_unique<Value>(builder_.next_id(), type_map_.ptr_type());
+        env_pval->name = ".env";
+        auto* env_pv = env_pval.get();
+        lit_func->params.push_back(std::move(env_pval));
+
+        // Alloca for env ptr
+        auto* env_alloca = builder_.create_alloca(type_map_.ptr_type(), ".env.addr");
+        builder_.create_store(env_pv, env_alloca);
+        auto* env = builder_.create_load(env_alloca, type_map_.ptr_type(), ".env");
+
+        // For each captured symbol, load from env[i*8]
+        for (size_t ci = 0; ci < captures.size(); ++ci) {
+            auto* sym = captures[ci];
+            IRType* cap_type = map_sema_type(sym->type);
+            // env is a ptr to an array of QWORDs; compute &env[ci]
+            auto* offset = builder_.create_const_int(type_map_.i64_type(), (int64_t)(ci * 8));
+            auto* field_ptr = builder_.create_getptr(env, offset, type_map_.ptr_type(),
+                                                     std::string(sym->name) + ".cap.addr");
+            // Alloca for local copy
+            auto* cap_alloca = builder_.create_alloca(cap_type,
+                                                      std::string(sym->name) + ".cap");
+            auto* loaded = builder_.create_load(field_ptr, cap_type,
+                                                std::string(sym->name) + ".cap.val");
+            builder_.create_store(loaded, cap_alloca);
+            var_map_[sym] = cap_alloca;
+        }
+    }
+
+    // Generate body
+    if (fl.body->kind == ast::StmtKind::Block) {
+        gen_block(fl.body->block);
+    }
+
+    // Ensure terminator
+    if (!builder_.insert_block()->has_terminator()) {
+        builder_.create_ret(nullptr);
+    }
+
+    // Restore outer context
+    current_func_ = saved_func;
+    var_map_      = saved_var_map;
+    loop_stack_   = saved_loops;
+    block_counter_= saved_counter;
+    builder_.set_insert_block(saved_block);
+
+    // ------------------------------------------------------------------
+    // In the outer function: if captures exist, malloc env and fill it.
+    // ------------------------------------------------------------------
+    if (!captures.empty()) {
+        // malloc(N * 8)
+        int64_t env_size = (int64_t)(captures.size() * 8);
+        auto* size_val = builder_.create_const_int(type_map_.i64_type(), env_size, "env.size");
+        env_ptr_val = builder_.create_malloc(size_val, "env");
+
+        for (size_t ci = 0; ci < captures.size(); ++ci) {
+            auto* sym = captures[ci];
+            IRType* cap_type = map_sema_type(sym->type);
+            // Load current value from outer var_map_
+            auto it = var_map_.find(sym);
+            Value* val = nullptr;
+            if (it != var_map_.end()) {
+                val = builder_.create_load(it->second, cap_type, std::string(sym->name));
+            }
+            if (!val) val = builder_.create_const_int(cap_type, 0);
+            // Store into env[ci]
+            auto* offset = builder_.create_const_int(type_map_.i64_type(), (int64_t)(ci * 8));
+            auto* field_ptr = builder_.create_getptr(env_ptr_val, offset, type_map_.ptr_type(),
+                                                     std::string(sym->name) + ".env.addr");
+            builder_.create_store(val, field_ptr);
+        }
+    }
+
+    return builder_.create_closure_make(lit_func, env_ptr_val, lit_name + ".val");
 }
 
 Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func_info) {

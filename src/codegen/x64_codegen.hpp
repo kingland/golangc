@@ -215,6 +215,11 @@ private:
     void emit_go_spawn(const ir::Instruction& inst);
     void emit_slice_make(const ir::Instruction& inst);
 
+    // Closures
+    void emit_closure_make(const ir::Instruction& inst);
+    void emit_closure_env(const ir::Instruction& inst);
+    void emit_malloc(const ir::Instruction& inst);
+
     // Map operations
     void emit_map_make(const ir::Instruction& inst);
     void emit_map_get(const ir::Instruction& inst);
@@ -269,6 +274,10 @@ private:
 
     /// Deferred calls collected during function emission (replayed LIFO at ret).
     std::vector<const ir::Instruction*> defers_;
+
+    /// Maps Value ID → env slot offset for fat closures.
+    /// Populated by emit_closure_make, propagated by emit_store/emit_load.
+    std::unordered_map<uint32_t, int32_t> closure_env_slots_;
 
     /// Get the MASM block label for a basic block within a function.
     [[nodiscard]] static std::string block_label(const ir::Function& func,

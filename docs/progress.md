@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 11 (Slice writes, append, map len/delete, for-range map) - Complete
-## Current Milestone: Phase 11 complete - SliceIndexAddr (s[i]=v), SliceAppend (append), MapLen (len(map)), MapIterMake/Next/Free (for range map), MapDelete (delete), parser []T fix — wordfreq.go → working .exe (120 codegen tests)
-## Completion Estimate: Phase 11 ~100%
+## Current Phase: 12 (Closures + defer) - Complete
+## Current Milestone: Phase 12 complete - func literals, capturing closures (env struct via malloc), defer with user-defined functions LIFO — closures.go → 10/7/15, defer.go → working/deferred 2/deferred 1/done (130 codegen tests, 517 total)
+## Completion Estimate: Phase 12 ~100%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -14,8 +14,8 @@
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T in call args fixed |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction |
 | IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr |
-| CodeGen | ✅ Complete | 120 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return |
-| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware, iter, delete) + slice_append |
+| CodeGen | ✅ Complete | 130 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return, closures, defer |
+| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
@@ -675,3 +675,30 @@
 #### Next Steps
 - **Phase 12**: Closures (func literals capturing variables), defer with arguments
 - **Future**: Direct PE generation, buffered channels, GC
+
+### Session 12 - Phase 12: Closures + defer
+#### Completed
+- **Root cause fix — `check_func_lit`** (`src/sema/checker_expr.cpp`): Populated `decl_sym_map_` for func-literal parameters, mirroring `check_func_decl`. This made func-literal params resolve correctly in IR gen (previously returned 0).
+- **3 new IR opcodes** (`src/ir/ir.hpp`): `ClosureMake`, `ClosureEnv`, `Malloc`
+- **`Function::has_env` flag**: Marks inner functions that receive a hidden env pointer as last parameter
+- **`src/ir/ir_builder.hpp/cpp`**: `create_closure_make`, `create_closure_env`, `create_malloc`; updated `create_chan_make` to store `elem_size` in `imm_int`; added `create_slice_make`
+- **`src/ir/ir_gen.hpp`**: Added `func_lit_counter_`, `collect_captures`, `collect_captures_expr` helpers; `#include <unordered_set>`
+- **`src/ir/ir_gen_expr.cpp`** — major additions:
+  - `collect_captures_expr`: AST walk of expressions finding outer-scope variable references (uses `binary.left/right`, `unary.x`, `paren.x`, `call.*`, `selector.x`, `index.*`, `composite_lit.elts`); skips nested `FuncLit`
+  - `collect_captures`: AST walk of statements (`block`, `return_`, `expr`, `assign`, `short_var_decl`, `if_`, `for_`, `inc_dec`)
+  - `gen_func_lit` rewritten: detect captures, malloc env struct in outer function, store captured values; inner function receives hidden `.env` param and loads captures via `[env+i*8]`; returns `ClosureMake(func_ptr, env_ptr)` when captures present, else `ClosureMake(func_ptr, nil)`
+  - `gen_call`: appends `ClosureEnv` as extra arg for indirect calls (function-valued variables)
+- **Global env variable approach** (`src/runtime/runtime.hpp/cpp`): `golangc_closure_env` global stores env ptr set by `ClosureMake`; `ClosureEnv` reads it back; works for sequential single-threaded programs
+- **`src/codegen/x64_codegen.hpp/cpp/inst.cpp`**: `emit_closure_make`, `emit_closure_env`, `emit_malloc`; `EXTERN golangc_closure_env:QWORD`; `closure_env_slots_` map (cleared per function); dispatch cases for 3 new opcodes
+- **Driver search path fix** (`src/driver/main.cpp`): Added `../../../lib/Release/golangc_runtime.lib` to runtime lib search paths (supports Release build layout `bin/Release/golangc.exe → lib/Release/golangc_runtime.lib`)
+- **10 new codegen tests** (120→130): `DeferEmitsDeferBlock`, `DeferRunsBeforeReturn`, `DeferMultipleRunsLIFO`, `DeferCompilesNoTodos`, `FuncLitEmitsInnerProc`, `FuncLitIndirectCall`, `FuncLitAsArgument`, `ClosureCapture`, `ClosureEnvGlobal`, `ClosuresGoCompilesNoTodos`
+
+#### Current State
+- `defer.go` → `working\ndeferred 2\ndeferred 1\ndone` ✅
+- `closures.go` → `10\n7\n15` ✅
+- All 9 samples compile to working .exes: hello, fibonacci, structs, interfaces, maps, wordfreq, goroutines, defer, closures
+- All 517 total tests pass (30+89+87+110+71+130)
+
+#### Next Steps
+- **Phase 13**: `fmt.Println` / `os.Exit` via import system; or switch/select statements; or string formatting
+- **Future**: Direct PE generation, buffered channels, GC, self-hosting

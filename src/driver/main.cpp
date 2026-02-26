@@ -244,6 +244,9 @@ int main(int argc, char* argv[]) {
         // Try several locations for the runtime lib
         std::vector<fs::path> search_paths = {
             exe_dir / "golangc_runtime.lib",
+            exe_dir / ".." / ".." / "lib" / "Release" / "golangc_runtime.lib",
+            exe_dir / ".." / ".." / "lib" / "Debug" / "golangc_runtime.lib",
+            exe_dir / ".." / "lib" / "Release" / "golangc_runtime.lib",
             exe_dir / ".." / "lib" / "Debug" / "golangc_runtime.lib",
             exe_dir / ".." / "lib" / "golangc_runtime.lib",
         };

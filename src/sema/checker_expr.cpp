@@ -266,11 +266,26 @@ ExprInfo Checker::check_func_lit(ast::FuncLitExpr& expr) {
 
         auto* scope = open_scope(ScopeKind::Function);
 
-        // Add parameters
+        // Add parameters and record AST ident → Symbol* mapping (same as check_func_decl).
+        size_t param_idx = 0;
         for (const auto& param : ft->func->params) {
             if (!param.name.empty() && param.name != "_") {
-                (void)declare(SymbolKind::Var, param.name, param.type, expr.loc);
+                auto* psym = declare(SymbolKind::Var, param.name, param.type, expr.loc);
+                // Map the AST IdentExpr* for this parameter name to the symbol,
+                // so the IR generator can look it up via checker_.decl_symbol().
+                if (psym && expr.type && expr.type->func.params) {
+                    size_t ast_idx = 0;
+                    for (auto* field : expr.type->func.params->fields) {
+                        for (auto* name_node : field->names) {
+                            if (ast_idx == param_idx && name_node) {
+                                decl_sym_map_[name_node] = psym;
+                            }
+                            ++ast_idx;
+                        }
+                    }
+                }
             }
+            ++param_idx;
         }
 
         // Check body

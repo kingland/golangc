@@ -115,6 +115,9 @@ enum class Opcode : uint8_t {
     SliceMake, SliceLen, SliceCap, SliceIndex, SliceIndexAddr, SliceAppend,
     MapMake, MapGet, MapSet, MapLen, MapDelete,
     MapIterMake, MapIterNext, MapIterFree,
+    ClosureMake,    // ClosureMake(func_ptr, env_ptr) → fat closure {func_ptr, env_ptr}
+    ClosureEnv,     // ClosureEnv(closure_val) → env_ptr (loads the env part of a fat closure)
+    Malloc,         // Malloc(size) → ptr — allocates heap memory via malloc()
     StringLen, StringIndex, StringConcat,
     InterfaceMake, InterfaceData, InterfaceType,
     Panic, Recover,
@@ -209,6 +212,7 @@ struct Function : Value {
     std::vector<std::unique_ptr<BasicBlock>> blocks;
     IRType* return_type = nullptr;
     bool is_method = false;
+    bool has_env    = false;  // Closure with captured-variable env pointer (hidden last param)
 
     Function() = default;
     Function(uint32_t id, IRType* func_type, std::string name)

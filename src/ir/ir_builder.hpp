@@ -148,6 +148,19 @@ public:
                                       const std::string& name = "");
     Instruction* create_map_iter_free(Value* iter);
 
+    // ---- Closures ----
+    /// Wrap a function pointer (and optional env pointer) as a fat-closure value.
+    /// operands[0] = func_ptr, operands[1] = env_ptr (may be ConstNil).
+    Instruction* create_closure_make(Value* func_ptr, Value* env_ptr = nullptr,
+                                     const std::string& name = "");
+
+    /// Extract the env pointer from a fat closure value.
+    Instruction* create_closure_env(Value* closure_val, const std::string& name = "");
+
+    // ---- Heap allocation ----
+    /// Allocate `size` bytes on the heap via malloc. Returns ptr.
+    Instruction* create_malloc(Value* size, const std::string& name = "");
+
     // ---- Extended slice operations ----
     Instruction* create_slice_index_addr(Value* slice, Value* index, const std::string& name = "");
     Instruction* create_slice_append(Value* slice, Value* elem, IRType* elem_type,

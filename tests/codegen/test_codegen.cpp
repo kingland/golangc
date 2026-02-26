@@ -1910,3 +1910,177 @@ func main() {
     EXPECT_TRUE(contains(result.asm_text, "call golangc_map_iter_make"));
     EXPECT_TRUE(contains(result.asm_text, "call golangc_slice_append"));
 }
+
+// ============================================================================
+// Phase 12: Defer tests
+// ============================================================================
+
+TEST(CodegenTest, DeferEmitsDeferBlock) {
+    auto result = compile_to_asm(R"(
+package main
+func log(x int) {
+    println(x)
+}
+func main() {
+    defer log(1)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Deferred calls are emitted before ret
+    EXPECT_TRUE(contains(result.asm_text, "call log"));
+    EXPECT_TRUE(contains(result.asm_text, "ret"));
+}
+
+TEST(CodegenTest, DeferRunsBeforeReturn) {
+    auto result = compile_to_asm(R"(
+package main
+func f() {
+    defer println(99)
+    println(1)
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Both println calls must appear in f PROC
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+TEST(CodegenTest, DeferMultipleRunsLIFO) {
+    auto result = compile_to_asm(R"(
+package main
+func log(x int) {
+    println(x)
+}
+func f() {
+    defer log(1)
+    defer log(2)
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Two deferred calls to log emitted in f
+    size_t first = result.asm_text.find("call log");
+    EXPECT_NE(first, std::string::npos);
+    size_t second = result.asm_text.find("call log", first + 1);
+    EXPECT_NE(second, std::string::npos);
+}
+
+TEST(CodegenTest, DeferCompilesNoTodos) {
+    auto result = compile_to_asm(R"(
+package main
+func cleanup(s string) {
+    println(s)
+}
+func main() {
+    defer cleanup("done")
+    println("working")
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_string"));
+}
+
+// ============================================================================
+// Phase 12: Closure / func literal tests
+// ============================================================================
+
+TEST(CodegenTest, FuncLitEmitsInnerProc) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    f := func(x int) int { return x + 1 }
+    println(f(5))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Inner function should appear as a separate PROC
+    EXPECT_TRUE(contains(result.asm_text, "PROC"));
+}
+
+TEST(CodegenTest, FuncLitIndirectCall) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    f := func(x int) int { return x * 2 }
+    println(f(7))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Indirect call via register (call rax or similar)
+    EXPECT_TRUE(contains(result.asm_text, "call "));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+TEST(CodegenTest, FuncLitAsArgument) {
+    auto result = compile_to_asm(R"(
+package main
+func apply(f func(int) int, x int) int {
+    return f(x)
+}
+func main() {
+    println(apply(func(n int) int { return n + 10 }, 5))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(CodegenTest, ClosureCapture) {
+    auto result = compile_to_asm(R"(
+package main
+func makeAdder(n int) func(int) int {
+    return func(x int) int { return x + n }
+}
+func main() {
+    add5 := makeAdder(5)
+    println(add5(10))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+    // malloc used to allocate env struct
+    EXPECT_TRUE(contains(result.asm_text, "call malloc"));
+}
+
+TEST(CodegenTest, ClosureEnvGlobal) {
+    auto result = compile_to_asm(R"(
+package main
+func makeCounter() func() int {
+    n := 0
+    return func() int { n = n + 1; return n }
+}
+func main() {
+    c := makeCounter()
+    println(c())
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Global closure env variable must be declared
+    EXPECT_TRUE(contains(result.asm_text, "golangc_closure_env"));
+}
+
+TEST(CodegenTest, ClosuresGoCompilesNoTodos) {
+    auto result = compile_to_asm(R"(
+package main
+func apply(f func(int) int, x int) int {
+    return f(x)
+}
+func makeAdder(n int) func(int) int {
+    return func(x int) int { return x + n }
+}
+func main() {
+    double := func(x int) int { return x * 2 }
+    println(apply(double, 5))
+    println(apply(func(x int) int { return x - 3 }, 10))
+    add5 := makeAdder(5)
+    println(add5(10))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+    EXPECT_TRUE(contains(result.asm_text, "call malloc"));
+}
