@@ -43,6 +43,10 @@ void golangc_string_concat(char* sret_out,
                             const char* ptr1, int64_t len1,
                             const char* ptr2, int64_t len2);
 
+/// Compare two strings by content. Returns 1 if equal, 0 otherwise.
+int64_t golangc_string_eq(const char* ptr1, int64_t len1,
+                           const char* ptr2, int64_t len2);
+
 /// Panic with a message and exit.
 [[noreturn]] void golangc_panic(const char* msg);
 

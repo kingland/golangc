@@ -134,6 +134,7 @@ public:
     Instruction* create_string_len(Value* str, const std::string& name = "");
     Instruction* create_string_index(Value* str, Value* index, const std::string& name = "");
     Instruction* create_string_concat(Value* a, Value* b, const std::string& name = "");
+    Instruction* create_string_eq(Value* lhs, Value* rhs, const std::string& name = "");
 
     // ---- Map operations ----
     Instruction* create_map_make(IRType* map_type, int64_t key_size = 8, int64_t val_size = 8,

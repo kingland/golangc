@@ -2084,3 +2084,260 @@ func main() {
     EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
     EXPECT_TRUE(contains(result.asm_text, "call malloc"));
 }
+
+// ============================================================================
+// Phase 13: Switch Statements
+// ============================================================================
+
+TEST(SwitchTest, SwitchBasicInt) {
+    auto result = compile_to_asm(R"(
+package main
+func f(n int) int {
+    switch n {
+    case 0:
+        return 10
+    case 1:
+        return 20
+    default:
+        return 30
+    }
+}
+func main() { println(f(0)) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Block labels use $ instead of . (MASM naming)
+    EXPECT_TRUE(contains(result.asm_text, "switch$case"));
+    EXPECT_TRUE(contains(result.asm_text, "switch$merge"));
+}
+
+TEST(SwitchTest, SwitchDefaultOnly) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    x := 5
+    switch x {
+    default:
+        println(1)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(SwitchTest, SwitchNoDefault) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    x := 42
+    switch x {
+    case 1:
+        println(1)
+    case 2:
+        println(2)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "switch$case"));
+}
+
+TEST(SwitchTest, SwitchMultipleValues) {
+    auto result = compile_to_asm(R"(
+package main
+func classify(n int) int {
+    switch n {
+    case 1, 2, 3:
+        return 1
+    default:
+        return 0
+    }
+}
+func main() { println(classify(2)) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Multiple case values generate multiple conditional branches
+    EXPECT_TRUE(contains(result.asm_text, "switch$case"));
+    EXPECT_TRUE(contains(result.asm_text, "switch$next"));
+}
+
+TEST(SwitchTest, SwitchTagless) {
+    auto result = compile_to_asm(R"(
+package main
+func grade(score int) int {
+    switch {
+    case score >= 90:
+        return 4
+    case score >= 80:
+        return 3
+    default:
+        return 0
+    }
+}
+func main() { println(grade(95)) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "switch$case"));
+    EXPECT_TRUE(contains(result.asm_text, "switch$merge"));
+}
+
+TEST(SwitchTest, SwitchWithInit) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    switch x := 5; x {
+    case 5:
+        println(99)
+    default:
+        println(0)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(SwitchTest, SwitchBreak) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    x := 1
+    switch x {
+    case 1:
+        println(1)
+        break
+        println(2)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // break jumps to merge block
+    EXPECT_TRUE(contains(result.asm_text, "switch$merge"));
+}
+
+TEST(SwitchTest, SwitchFallthrough) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    x := 1
+    switch x {
+    case 1:
+        fallthrough
+    case 2:
+        println(99)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // fallthrough generates a branch to the next case block
+    EXPECT_TRUE(contains(result.asm_text, "switch$case"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(SwitchTest, SwitchStringEqEmitsCall) {
+    auto result = compile_to_asm(R"(
+package main
+func f(s string) int {
+    switch s {
+    case "hello":
+        return 1
+    case "world":
+        return 2
+    default:
+        return 0
+    }
+}
+func main() { println(f("hello")) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_string_eq"));
+}
+
+TEST(SwitchTest, SwitchStringEqExtern) {
+    auto result = compile_to_asm(R"(
+package main
+func f(s string) int {
+    switch s {
+    case "x":
+        return 1
+    default:
+        return 0
+    }
+}
+func main() { println(f("x")) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_string_eq:PROC"));
+}
+
+TEST(SwitchTest, SwitchCompilesNoTodos) {
+    auto result = compile_to_asm(R"(
+package main
+func classify(n int) string {
+    switch n {
+    case 0:
+        return "zero"
+    case 1, 2, 3:
+        return "small"
+    case 10:
+        return "ten"
+    default:
+        return "other"
+    }
+}
+func grade(score int) string {
+    switch {
+    case score >= 90:
+        return "A"
+    case score >= 80:
+        return "B"
+    case score >= 70:
+        return "C"
+    default:
+        return "F"
+    }
+}
+func main() {
+    println(classify(0))
+    println(classify(2))
+    println(classify(10))
+    println(classify(99))
+    println(grade(95))
+    println(grade(85))
+    println(grade(65))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+TEST(SwitchTest, SwitchGoFull) {
+    auto result = compile_to_asm(R"(
+package main
+func classify(n int) string {
+    switch n {
+    case 0:
+        return "zero"
+    case 1, 2, 3:
+        return "small"
+    default:
+        return "other"
+    }
+}
+func grade(score int) string {
+    switch {
+    case score >= 90:
+        return "A"
+    default:
+        return "F"
+    }
+}
+func main() {
+    println(classify(0))
+    println(grade(95))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "classify PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "grade PROC"));
+}

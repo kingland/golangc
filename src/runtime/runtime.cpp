@@ -75,6 +75,14 @@ void golangc_string_concat(char* sret_out,
     *out_len = total;
 }
 
+int64_t golangc_string_eq(const char* ptr1, int64_t len1,
+                           const char* ptr2, int64_t len2) {
+    if (len1 != len2) return 0;
+    if (len1 == 0) return 1;
+    if (!ptr1 || !ptr2) return 0;
+    return memcmp(ptr1, ptr2, static_cast<size_t>(len1)) == 0 ? 1 : 0;
+}
+
 [[noreturn]] void golangc_panic(const char* msg) {
     fprintf(stderr, "goroutine 1 [running]:\npanic: %s\n", msg ? msg : "unknown");
     exit(2);

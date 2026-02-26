@@ -187,6 +187,7 @@ private:
     void emit_string_len(const ir::Instruction& inst);
     void emit_string_index(const ir::Instruction& inst);
     void emit_string_concat(const ir::Instruction& inst);
+    void emit_string_eq(const ir::Instruction& inst);
 
     // Slice operations
     void emit_slice_len(const ir::Instruction& inst);

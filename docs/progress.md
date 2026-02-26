@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 12 (Closures + defer) - Complete
-## Current Milestone: Phase 12 complete - func literals, capturing closures (env struct via malloc), defer with user-defined functions LIFO — closures.go → 10/7/15, defer.go → working/deferred 2/deferred 1/done (130 codegen tests, 517 total)
-## Completion Estimate: Phase 12 ~100%
+## Current Phase: 13 (Switch Statements) - Complete
+## Current Milestone: Phase 13 complete - StringEq opcode, fallthrough, string switch fix, 12 new tests — switch.go sample added (142 codegen tests, 529 total)
+## Completion Estimate: Phase 13 ~100%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -13,9 +13,9 @@
 | AST | ✅ Complete | - | Full node hierarchy (16 expr, 21 stmt, 7 decl, 13 type kinds) |
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T in call args fixed |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction |
-| IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr |
-| CodeGen | ✅ Complete | 130 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return, closures, defer |
-| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global |
+| IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq |
+| CodeGen | ✅ Complete | 142 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough) |
+| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
@@ -701,4 +701,27 @@
 
 #### Next Steps
 - **Phase 13**: `fmt.Println` / `os.Exit` via import system; or switch/select statements; or string formatting
+- **Future**: Direct PE generation, buffered channels, GC, self-hosting
+
+### Session 13 - Phase 13: Switch Statements
+#### Completed
+- **`StringEq` IR opcode** (`src/ir/ir.hpp`, `src/ir/ir.cpp`): New opcode `StringEq` for runtime string content comparison; `opcode_name` returns `"string_eq"`
+- **`create_string_eq`** (`src/ir/ir_builder.hpp/cpp`): Builder method producing an `i1` result, operands `{lhs, rhs}`
+- **Fix string == / !=** (`src/ir/ir_gen_expr.cpp`): In `gen_binary`, `Equal`/`NotEqual` cases now check `is_string` and route through `create_string_eq`/`create_lognot` instead of raw pointer `create_eq`/`create_ne`
+- **Fix `gen_switch` for string tag** (`src/ir/ir_gen_stmt.cpp`): Detect `tag_is_string` once before the loop; generate `create_string_eq` comparisons instead of `create_eq` for string-typed switch tags
+- **Implement `fallthrough`** (`src/ir/ir_gen.hpp`, `src/ir/ir_gen_stmt.cpp`): Added `fallthrough_map_` member; `gen_switch` populates `case[i].block → case[i+1].block` entries; `gen_branch` handles `KW_fallthrough` by looking up the current block and branching to the next case
+- **`golangc_string_eq` runtime function** (`src/runtime/runtime.hpp/cpp`): `memcmp`-based implementation; returns 1 if equal, 0 otherwise; handles null/zero-length edge cases
+- **`emit_string_eq` codegen** (`src/codegen/x64_codegen.hpp/cpp/inst.cpp`): Loads ptr+len of both strings into RCX/RDX/R8/R9, calls `golangc_string_eq`, stores result; `EXTERN golangc_string_eq:PROC` added to module header
+- **`samples/switch.go`**: New sample with `classify` (int switch, multi-value case) and `grade` (tagless switch) functions; expected output: `zero/small/ten/other/A/B/F`
+- **12 new codegen tests** (130→142): `SwitchBasicInt`, `SwitchDefaultOnly`, `SwitchNoDefault`, `SwitchMultipleValues`, `SwitchTagless`, `SwitchWithInit`, `SwitchBreak`, `SwitchFallthrough`, `SwitchStringEqEmitsCall`, `SwitchStringEqExtern`, `SwitchCompilesNoTodos`, `SwitchGoFull`
+
+#### Current State
+- All 9 existing samples still compile; `switch.go` added as 10th sample
+- All 529 total tests pass (30+89+87+110+71+142)
+- String equality (`==`/`!=`) now works correctly via `golangc_string_eq`
+- `fallthrough` generates correct branch to next case block
+- String switch tag uses content comparison not pointer comparison
+
+#### Next Steps
+- **Phase 14**: `select` statement for channel multiplexing; or `fmt` package import system; or type switches
 - **Future**: Direct PE generation, buffered channels, GC, self-hosting

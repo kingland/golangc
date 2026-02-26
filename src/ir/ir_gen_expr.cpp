@@ -270,9 +270,15 @@ Value* IRGenerator::gen_binary(ast::Expr* expr) {
         case TokenKind::AmpCaret:
             return builder_.create_andnot(lhs, rhs, "andnot");
         case TokenKind::Equal:
+            if (is_string)
+                return builder_.create_string_eq(lhs, rhs, "seq");
             return is_float ? builder_.create_feq(lhs, rhs, "eq")
                             : builder_.create_eq(lhs, rhs, "eq");
         case TokenKind::NotEqual:
+            if (is_string) {
+                auto* eq = builder_.create_string_eq(lhs, rhs, "seq");
+                return builder_.create_lognot(eq, "sne");
+            }
             return is_float ? builder_.create_fne(lhs, rhs, "ne")
                             : builder_.create_ne(lhs, rhs, "ne");
         case TokenKind::Less:

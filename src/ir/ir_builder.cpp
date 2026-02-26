@@ -501,6 +501,12 @@ Instruction* IRBuilder::create_string_concat(Value* a, Value* b, const std::stri
     return emit_binary(Opcode::StringConcat, a, b, type_map_.string_type(), name);
 }
 
+Instruction* IRBuilder::create_string_eq(Value* lhs, Value* rhs, const std::string& name) {
+    auto* inst = emit(Opcode::StringEq, type_map_.i1_type(), name);
+    inst->operands = {lhs, rhs};
+    return inst;
+}
+
 // ============================================================================
 // Map operations
 // ============================================================================

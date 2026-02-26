@@ -118,7 +118,7 @@ enum class Opcode : uint8_t {
     ClosureMake,    // ClosureMake(func_ptr, env_ptr) → fat closure {func_ptr, env_ptr}
     ClosureEnv,     // ClosureEnv(closure_val) → env_ptr (loads the env part of a fat closure)
     Malloc,         // Malloc(size) → ptr — allocates heap memory via malloc()
-    StringLen, StringIndex, StringConcat,
+    StringLen, StringIndex, StringConcat, StringEq,
     InterfaceMake, InterfaceData, InterfaceType,
     Panic, Recover,
     Println,

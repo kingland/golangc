@@ -40,6 +40,9 @@ private:
     };
     std::vector<LoopContext> loop_stack_;
 
+    // Fallthrough map: case block → next case block (for fallthrough statements)
+    std::unordered_map<const ir::BasicBlock*, ir::BasicBlock*> fallthrough_map_;
+
     Function* current_func_ = nullptr;
     uint32_t block_counter_ = 0;
     uint32_t func_lit_counter_ = 0;  // Unique suffix for func literal names

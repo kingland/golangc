@@ -135,6 +135,7 @@ void X64CodeGenerator::emit_instruction(const ir::Instruction& inst,
         case ir::Opcode::StringLen:    emit_string_len(inst); break;
         case ir::Opcode::StringIndex:  emit_string_index(inst); break;
         case ir::Opcode::StringConcat: emit_string_concat(inst); break;
+        case ir::Opcode::StringEq:     emit_string_eq(inst); break;
 
         // Slice operations
         case ir::Opcode::SliceLen:   emit_slice_len(inst); break;
@@ -1125,6 +1126,57 @@ void X64CodeGenerator::emit_string_concat(const ir::Instruction& inst) {
     emit("call golangc_string_concat");
     emit(fmt::format("add rsp, {}", kShadowSpace));
     emit("add rsp, 8"); // pop the pushed arg
+}
+
+void X64CodeGenerator::emit_string_eq(const ir::Instruction& inst) {
+    auto result_slot = get_temp_slot(inst.id);
+    auto* a = inst.operands[0];
+    auto* b = inst.operands[1];
+
+    // Load ptr1 → RCX
+    if (temp_slots_.count(a->id))
+        emit(fmt::format("mov rcx, QWORD PTR [rbp{}]", temp_slots_[a->id]));
+    else if (frame_.has_slot(a->id))
+        emit(fmt::format("mov rcx, QWORD PTR [rbp{}]", frame_.offset_of(a->id)));
+
+    // Load len1 → RDX
+    {
+        uint32_t len_id = a->id + 100000;
+        auto it = temp_slots_.find(len_id);
+        if (it != temp_slots_.end())
+            emit(fmt::format("mov rdx, QWORD PTR [rbp{}]", it->second));
+        else if (frame_.has_slot(len_id))
+            emit(fmt::format("mov rdx, QWORD PTR [rbp{}]", frame_.offset_of(len_id)));
+        else if (temp_slots_.count(a->id))
+            emit(fmt::format("mov rdx, QWORD PTR [rbp{}]", temp_slots_[a->id] + 8));
+        else if (frame_.has_slot(a->id))
+            emit(fmt::format("mov rdx, QWORD PTR [rbp{}]", frame_.offset_of(a->id) + 8));
+    }
+
+    // Load ptr2 → R8
+    if (temp_slots_.count(b->id))
+        emit(fmt::format("mov r8, QWORD PTR [rbp{}]", temp_slots_[b->id]));
+    else if (frame_.has_slot(b->id))
+        emit(fmt::format("mov r8, QWORD PTR [rbp{}]", frame_.offset_of(b->id)));
+
+    // Load len2 → R9
+    {
+        uint32_t len_id = b->id + 100000;
+        auto it = temp_slots_.find(len_id);
+        if (it != temp_slots_.end())
+            emit(fmt::format("mov r9, QWORD PTR [rbp{}]", it->second));
+        else if (frame_.has_slot(len_id))
+            emit(fmt::format("mov r9, QWORD PTR [rbp{}]", frame_.offset_of(len_id)));
+        else if (temp_slots_.count(b->id))
+            emit(fmt::format("mov r9, QWORD PTR [rbp{}]", temp_slots_[b->id] + 8));
+        else if (frame_.has_slot(b->id))
+            emit(fmt::format("mov r9, QWORD PTR [rbp{}]", frame_.offset_of(b->id) + 8));
+    }
+
+    emit(fmt::format("sub rsp, {}", kShadowSpace));
+    emit("call golangc_string_eq");
+    emit(fmt::format("add rsp, {}", kShadowSpace));
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", result_slot));
 }
 
 // ============================================================================

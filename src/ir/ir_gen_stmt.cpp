@@ -546,6 +546,10 @@ void IRGenerator::gen_switch(ast::SwitchStmt& stmt) {
         tag = gen_expr(stmt.tag);
     }
 
+    // Determine if the tag is a string type (computed once, before the loop)
+    auto* tag_sema_type = stmt.tag ? expr_type(stmt.tag) : nullptr;
+    bool tag_is_string = tag_sema_type && sema::is_string(tag_sema_type);
+
     auto* merge_bb = current_func_->create_block(fresh_block_name("switch.merge"));
 
     // Generate case blocks
@@ -569,6 +573,12 @@ void IRGenerator::gen_switch(ast::SwitchStmt& stmt) {
         cases.push_back({case_bb, std::move(vals), &cc->body, is_default});
     }
 
+    // Populate fallthrough map: case[i].block → case[i+1].block
+    fallthrough_map_.clear();
+    for (size_t i = 0; i + 1 < cases.size(); ++i) {
+        fallthrough_map_[cases[i].block] = cases[i + 1].block;
+    }
+
     // Generate chain of conditional branches
     if (tag) {
         for (size_t i = 0; i < cases.size(); ++i) {
@@ -578,7 +588,11 @@ void IRGenerator::gen_switch(ast::SwitchStmt& stmt) {
             for (auto* val_expr : ci.values) {
                 auto* val = gen_expr(val_expr);
                 if (!val) continue;
-                auto* cmp = builder_.create_eq(tag, val, "switch.cmp");
+                Value* cmp = nullptr;
+                if (tag_is_string)
+                    cmp = builder_.create_string_eq(tag, val, "switch.cmp");
+                else
+                    cmp = builder_.create_eq(tag, val, "switch.cmp");
                 auto* next_bb = current_func_->create_block(fresh_block_name("switch.next"));
                 builder_.create_condbr(cmp, ci.block, next_bb);
                 builder_.set_insert_block(next_bb);
@@ -620,6 +634,9 @@ void IRGenerator::gen_switch(ast::SwitchStmt& stmt) {
         }
     }
     loop_stack_.pop_back();
+
+    // Clear the fallthrough map after the switch is done
+    fallthrough_map_.clear();
 
     builder_.set_insert_block(merge_bb);
 }
@@ -699,8 +716,15 @@ void IRGenerator::gen_branch(ast::BranchStmt& stmt) {
                 builder_.create_br(loop_stack_.back().continue_target);
             }
             break;
+        case TokenKind::KW_fallthrough: {
+            auto it = fallthrough_map_.find(builder_.insert_block());
+            if (it != fallthrough_map_.end()) {
+                builder_.create_br(it->second);
+            }
+            break;
+        }
         default:
-            // goto, fallthrough — not yet handled
+            // goto — not yet handled
             break;
     }
 }
