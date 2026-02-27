@@ -742,4 +742,146 @@ double golangc_math_log(double x)          { return log(x); }
 double golangc_math_log2(double x)         { return log2(x); }
 double golangc_math_log10(double x)        { return log10(x); }
 
+// ============================================================================
+// strings.Builder
+// ============================================================================
+
+struct golangc_builder {
+    char*   buf;
+    int64_t len;
+    int64_t cap;
+};
+
+golangc_builder* golangc_builder_make(void) {
+    auto* b = static_cast<golangc_builder*>(std::malloc(sizeof(golangc_builder)));
+    if (!b) return nullptr;
+    b->cap = 64;
+    b->buf = static_cast<char*>(std::malloc(static_cast<size_t>(b->cap)));
+    b->len = 0;
+    if (!b->buf) { std::free(b); return nullptr; }
+    return b;
+}
+
+static void builder_grow(golangc_builder* b, int64_t need) {
+    if (b->len + need <= b->cap) return;
+    int64_t new_cap = b->cap * 2;
+    if (new_cap < b->len + need) new_cap = b->len + need + 64;
+    b->buf = static_cast<char*>(std::realloc(b->buf, static_cast<size_t>(new_cap)));
+    b->cap = new_cap;
+}
+
+void golangc_builder_write_string(golangc_builder* b, const char* ptr, int64_t len) {
+    if (!b || !ptr || len <= 0) return;
+    builder_grow(b, len);
+    std::memcpy(b->buf + b->len, ptr, static_cast<size_t>(len));
+    b->len += len;
+}
+
+void golangc_builder_write_byte(golangc_builder* b, int64_t byte_val) {
+    if (!b) return;
+    builder_grow(b, 1);
+    b->buf[b->len++] = static_cast<char>(byte_val);
+}
+
+void golangc_builder_string(char* sret_out, golangc_builder* b) {
+    if (!b || !sret_out) return;
+    // Copy buffer into a heap string (caller does not own builder's buf).
+    char* out = static_cast<char*>(std::malloc(static_cast<size_t>(b->len + 1)));
+    if (!out) {
+        std::memset(sret_out, 0, 16);
+        return;
+    }
+    std::memcpy(out, b->buf, static_cast<size_t>(b->len));
+    out[b->len] = '\0';
+    std::memcpy(sret_out,     &out,    sizeof(char*));
+    std::memcpy(sret_out + 8, &b->len, sizeof(int64_t));
+}
+
+void golangc_builder_reset(golangc_builder* b) {
+    if (b) b->len = 0;
+}
+
+int64_t golangc_builder_len(golangc_builder* b) {
+    return b ? b->len : 0;
+}
+
+// ============================================================================
+// errors package
+// ============================================================================
+
+// Interface layout: { int64_t type_tag, void* data_ptr }
+// type_tag == 0 → nil interface; type_tag == 1 → error value.
+
+struct GoRuntimeString2 {
+    const char* ptr;
+    int64_t     len;
+};
+
+void golangc_errors_new(char* sret_out, const char* msg_ptr, int64_t msg_len) {
+    // Allocate a GoRuntimeString2 on the heap to hold the error message.
+    auto* s = static_cast<GoRuntimeString2*>(std::malloc(sizeof(GoRuntimeString2)));
+    if (!s) { std::memset(sret_out, 0, 16); return; }
+    // Copy the message bytes.
+    char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(msg_len + 1)));
+    if (!buf) { std::free(s); std::memset(sret_out, 0, 16); return; }
+    std::memcpy(buf, msg_ptr, static_cast<size_t>(msg_len));
+    buf[msg_len] = '\0';
+    s->ptr = buf;
+    s->len = msg_len;
+    int64_t tag = 1;
+    std::memcpy(sret_out,     &tag, sizeof(int64_t));
+    std::memcpy(sret_out + 8, &s,   sizeof(void*));
+}
+
+void golangc_fmt_errorf(char* sret_out, const char* fmt_ptr, int64_t fmt_len, ...) {
+    // Format the message using the existing internal formatter, then wrap.
+    char buf[1024];
+    int64_t written = 0;
+    // Simple copy-until-format-specifier loop (reuse golangc_sprintf logic).
+    va_list ap;
+    va_start(ap, fmt_len);
+    const char* f = fmt_ptr;
+    const char* end = fmt_ptr + fmt_len;
+    char* out = buf;
+    char* out_end = buf + sizeof(buf) - 1;
+    while (f < end && out < out_end) {
+        if (*f == '%' && f + 1 < end) {
+            ++f;
+            char spec = *f++;
+            if (spec == 'd' || spec == 'v') {
+                int64_t val = va_arg(ap, int64_t);
+                int n = snprintf(out, static_cast<size_t>(out_end - out), "%lld",
+                                 static_cast<long long>(val));
+                if (n > 0) out += n;
+            } else if (spec == 's') {
+                const char* s_ptr = va_arg(ap, const char*);
+                int64_t s_len = va_arg(ap, int64_t);
+                int64_t copy = s_len < (out_end - out) ? s_len : (out_end - out);
+                std::memcpy(out, s_ptr, static_cast<size_t>(copy));
+                out += copy;
+            } else {
+                *out++ = '%'; *out++ = spec;
+            }
+        } else {
+            *out++ = *f++;
+        }
+    }
+    va_end(ap);
+    *out = '\0';
+    written = static_cast<int64_t>(out - buf);
+
+    // Allocate and return as error interface.
+    char* msg = static_cast<char*>(std::malloc(static_cast<size_t>(written + 1)));
+    if (!msg) { std::memset(sret_out, 0, 16); return; }
+    std::memcpy(msg, buf, static_cast<size_t>(written + 1));
+
+    auto* s = static_cast<GoRuntimeString2*>(std::malloc(sizeof(GoRuntimeString2)));
+    if (!s) { std::free(msg); std::memset(sret_out, 0, 16); return; }
+    s->ptr = msg;
+    s->len = written;
+    int64_t tag = 1;
+    std::memcpy(sret_out,     &tag, sizeof(int64_t));
+    std::memcpy(sret_out + 8, &s,   sizeof(void*));
+}
+
 } // extern "C"

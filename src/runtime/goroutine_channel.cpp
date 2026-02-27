@@ -7,50 +7,103 @@
 #include <cstring>
 
 // ============================================================================
-// Channel implementation — unbuffered rendezvous via two semaphores
+// Channel implementation
+// Unbuffered (buffer_cap == 0): two-semaphore rendezvous.
+// Buffered  (buffer_cap  > 0): ring buffer with counting semaphores.
 // ============================================================================
 
 struct golangc_chan {
-    CRITICAL_SECTION lock;      // Protects data_ptr assignment
-    HANDLE           sender_ready; // Semaphore: sender has parked data (initial=0)
-    HANDLE           recv_ready;   // Semaphore: receiver has consumed data (initial=0)
-    void*            data_ptr;     // Points into sender's live stack frame
+    CRITICAL_SECTION lock;
     int64_t          elem_size;
+    int64_t          buffer_cap;   // 0 = unbuffered
+
+    // --- Unbuffered fields (used when buffer_cap == 0) ---
+    HANDLE  sender_ready;  // Semaphore: sender has parked data (initial=0)
+    HANDLE  recv_ready;    // Semaphore: receiver has consumed data (initial=0)
+    void*   data_ptr;      // Points into sender's live stack frame
+
+    // --- Buffered fields (used when buffer_cap > 0) ---
+    void*   buffer;        // heap: buffer_cap * elem_size bytes
+    int64_t head;          // read index (mod buffer_cap)
+    int64_t tail;          // write index (mod buffer_cap)
+    HANDLE  not_full;      // counting semaphore, initial = buffer_cap
+    HANDLE  not_empty;     // counting semaphore, initial = 0
 };
 
 extern "C" {
 
-golangc_chan* golangc_chan_make(int64_t elem_size) {
+golangc_chan* golangc_chan_make(int64_t elem_size, int64_t buffer_cap) {
     auto* ch = static_cast<golangc_chan*>(std::malloc(sizeof(golangc_chan)));
     if (!ch) return nullptr;
     InitializeCriticalSection(&ch->lock);
-    ch->sender_ready = CreateSemaphoreA(nullptr, 0, 1, nullptr);
-    ch->recv_ready   = CreateSemaphoreA(nullptr, 0, 1, nullptr);
-    ch->data_ptr     = nullptr;
-    ch->elem_size    = elem_size;
+    ch->elem_size   = elem_size;
+    ch->buffer_cap  = buffer_cap;
+
+    if (buffer_cap == 0) {
+        // Unbuffered
+        ch->sender_ready = CreateSemaphoreA(nullptr, 0, 1, nullptr);
+        ch->recv_ready   = CreateSemaphoreA(nullptr, 0, 1, nullptr);
+        ch->data_ptr     = nullptr;
+        ch->buffer       = nullptr;
+        ch->head = ch->tail = 0;
+        ch->not_full  = nullptr;
+        ch->not_empty = nullptr;
+    } else {
+        // Buffered
+        ch->sender_ready = nullptr;
+        ch->recv_ready   = nullptr;
+        ch->data_ptr     = nullptr;
+        ch->buffer = std::malloc(static_cast<size_t>(buffer_cap * elem_size));
+        ch->head = ch->tail = 0;
+        ch->not_full  = CreateSemaphoreA(nullptr, static_cast<LONG>(buffer_cap),
+                                          static_cast<LONG>(buffer_cap), nullptr);
+        ch->not_empty = CreateSemaphoreA(nullptr, 0,
+                                          static_cast<LONG>(buffer_cap), nullptr);
+    }
     return ch;
 }
 
 void golangc_chan_send(golangc_chan* ch, void* val_ptr) {
-    // Park the pointer to the sender's stack slot, then signal receiver.
-    EnterCriticalSection(&ch->lock);
-    ch->data_ptr = val_ptr;
-    ReleaseSemaphore(ch->sender_ready, 1, nullptr);
-    LeaveCriticalSection(&ch->lock);
-
-    // Wait until receiver has consumed the value (then sender's frame is free).
-    WaitForSingleObject(ch->recv_ready, INFINITE);
+    if (ch->buffer_cap == 0) {
+        // Unbuffered: park pointer, signal receiver, wait for ack.
+        EnterCriticalSection(&ch->lock);
+        ch->data_ptr = val_ptr;
+        ReleaseSemaphore(ch->sender_ready, 1, nullptr);
+        LeaveCriticalSection(&ch->lock);
+        WaitForSingleObject(ch->recv_ready, INFINITE);
+    } else {
+        // Buffered: wait for space, then copy into ring buffer slot.
+        WaitForSingleObject(ch->not_full, INFINITE);
+        EnterCriticalSection(&ch->lock);
+        auto* slot = static_cast<char*>(ch->buffer) +
+                     (ch->tail % ch->buffer_cap) * ch->elem_size;
+        std::memcpy(slot, val_ptr, static_cast<size_t>(ch->elem_size));
+        ch->tail++;
+        LeaveCriticalSection(&ch->lock);
+        ReleaseSemaphore(ch->not_empty, 1, nullptr);
+    }
 }
 
 void golangc_chan_recv(golangc_chan* ch, void* out_ptr) {
-    // Wait for sender to park a value.
-    WaitForSingleObject(ch->sender_ready, INFINITE);
-
-    EnterCriticalSection(&ch->lock);
-    std::memcpy(out_ptr, ch->data_ptr, static_cast<size_t>(ch->elem_size));
-    ch->data_ptr = nullptr;
-    ReleaseSemaphore(ch->recv_ready, 1, nullptr);
-    LeaveCriticalSection(&ch->lock);
+    if (ch->buffer_cap == 0) {
+        // Unbuffered: wait for sender to park a value.
+        WaitForSingleObject(ch->sender_ready, INFINITE);
+        EnterCriticalSection(&ch->lock);
+        std::memcpy(out_ptr, ch->data_ptr, static_cast<size_t>(ch->elem_size));
+        ch->data_ptr = nullptr;
+        ReleaseSemaphore(ch->recv_ready, 1, nullptr);
+        LeaveCriticalSection(&ch->lock);
+    } else {
+        // Buffered: wait for data, then copy from ring buffer slot.
+        WaitForSingleObject(ch->not_empty, INFINITE);
+        EnterCriticalSection(&ch->lock);
+        auto* slot = static_cast<char*>(ch->buffer) +
+                     (ch->head % ch->buffer_cap) * ch->elem_size;
+        std::memcpy(out_ptr, slot, static_cast<size_t>(ch->elem_size));
+        ch->head++;
+        LeaveCriticalSection(&ch->lock);
+        ReleaseSemaphore(ch->not_full, 1, nullptr);
+    }
 }
 
 // ============================================================================
@@ -132,36 +185,64 @@ int64_t golangc_select(SelectCase* cases, int64_t num_cases, int64_t has_default
             if (!ch) continue;
 
             if (c->op == 0) {
-                // Recv: try non-blocking wait on sender_ready semaphore
-                if (WaitForSingleObject(ch->sender_ready, 0) == WAIT_OBJECT_0) {
-                    EnterCriticalSection(&ch->lock);
-                    if (c->val && ch->data_ptr)
-                        std::memcpy(c->val, ch->data_ptr, static_cast<size_t>(ch->elem_size));
-                    ch->data_ptr = nullptr;
-                    ReleaseSemaphore(ch->recv_ready, 1, nullptr);
-                    LeaveCriticalSection(&ch->lock);
-                    return i;
-                }
-            } else {
-                // Send: ready only if no other sender is currently occupying the channel.
-                // Try to post the value and briefly wait for receiver acknowledgement.
-                // This is a best-effort non-blocking send for select.
-                EnterCriticalSection(&ch->lock);
-                if (ch->data_ptr == nullptr) {
-                    ch->data_ptr = c->val;
-                    ReleaseSemaphore(ch->sender_ready, 1, nullptr);
-                    LeaveCriticalSection(&ch->lock);
-                    if (WaitForSingleObject(ch->recv_ready, 5) == WAIT_OBJECT_0) {
+                // Recv
+                if (ch->buffer_cap == 0) {
+                    // Unbuffered: try non-blocking wait on sender_ready
+                    if (WaitForSingleObject(ch->sender_ready, 0) == WAIT_OBJECT_0) {
+                        EnterCriticalSection(&ch->lock);
+                        if (c->val && ch->data_ptr)
+                            std::memcpy(c->val, ch->data_ptr, static_cast<size_t>(ch->elem_size));
+                        ch->data_ptr = nullptr;
+                        ReleaseSemaphore(ch->recv_ready, 1, nullptr);
+                        LeaveCriticalSection(&ch->lock);
                         return i;
                     }
-                    // No receiver within 5ms — undo by clearing data_ptr
-                    // (sender_ready was already consumed if receiver came in; if not,
-                    //  the channel is left in a bad state; this is an approximation)
-                    EnterCriticalSection(&ch->lock);
-                    ch->data_ptr = nullptr;
-                    LeaveCriticalSection(&ch->lock);
                 } else {
-                    LeaveCriticalSection(&ch->lock);
+                    // Buffered: try non-blocking wait on not_empty
+                    if (WaitForSingleObject(ch->not_empty, 0) == WAIT_OBJECT_0) {
+                        EnterCriticalSection(&ch->lock);
+                        if (c->val) {
+                            auto* slot = static_cast<char*>(ch->buffer) +
+                                         (ch->head % ch->buffer_cap) * ch->elem_size;
+                            std::memcpy(c->val, slot, static_cast<size_t>(ch->elem_size));
+                            ch->head++;
+                        }
+                        LeaveCriticalSection(&ch->lock);
+                        ReleaseSemaphore(ch->not_full, 1, nullptr);
+                        return i;
+                    }
+                }
+            } else {
+                // Send
+                if (ch->buffer_cap == 0) {
+                    // Unbuffered: best-effort non-blocking send
+                    EnterCriticalSection(&ch->lock);
+                    if (ch->data_ptr == nullptr) {
+                        ch->data_ptr = c->val;
+                        ReleaseSemaphore(ch->sender_ready, 1, nullptr);
+                        LeaveCriticalSection(&ch->lock);
+                        if (WaitForSingleObject(ch->recv_ready, 5) == WAIT_OBJECT_0) {
+                            return i;
+                        }
+                        EnterCriticalSection(&ch->lock);
+                        ch->data_ptr = nullptr;
+                        LeaveCriticalSection(&ch->lock);
+                    } else {
+                        LeaveCriticalSection(&ch->lock);
+                    }
+                } else {
+                    // Buffered: try non-blocking send
+                    if (WaitForSingleObject(ch->not_full, 0) == WAIT_OBJECT_0) {
+                        EnterCriticalSection(&ch->lock);
+                        auto* slot = static_cast<char*>(ch->buffer) +
+                                     (ch->tail % ch->buffer_cap) * ch->elem_size;
+                        if (c->val)
+                            std::memcpy(slot, c->val, static_cast<size_t>(ch->elem_size));
+                        ch->tail++;
+                        LeaveCriticalSection(&ch->lock);
+                        ReleaseSemaphore(ch->not_empty, 1, nullptr);
+                        return i;
+                    }
                 }
             }
         }

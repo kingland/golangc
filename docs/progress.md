@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 19 (for-range-string UTF-8, strings package, math package) - Complete
-## Current Milestone: Phase 19 complete - for-range-string emits golangc_string_decode_rune (proper UTF-8 rune iteration), strings pseudo-package (Contains/HasPrefix/HasSuffix/Index/ToUpper/ToLower/TrimSpace/Repeat/Replace/Count/Trim), math pseudo-package (Abs/Sqrt/Floor/Ceil/Round/Max/Min/Pow/Log/Log2/Log10), 13 new Phase19Test tests — strings_math_demo.go sample added (205 codegen tests, 592 total)
-## Completion Estimate: 83%
+## Current Phase: 20 (strings.Builder, errors.New/fmt.Errorf, buffered channels) - Complete
+## Current Milestone: Phase 20 complete - strings.Builder opaque type with WriteString/WriteByte/String/Reset/Len methods, errors.New returns error interface, fmt.Errorf formats error values, buffered channels make(chan T, n) with ring buffer — 12 new Phase20Test tests — builder_errors_demo.go sample added (217 codegen tests, 604 total)
+## Completion Estimate: 86%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -14,8 +14,8 @@
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T in call args fixed |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction; spread type check fix; unused param false positive fix |
 | IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq, make_array_type public |
-| CodeGen | ✅ Complete | 205 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings package, math package |
-| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get + golangc_string_decode_rune + strings package (contains/prefix/suffix/index/upper/lower/trim/repeat/replace/count) + math package (abs/sqrt/floor/ceil/round/max/min/pow/log) |
+| CodeGen | ✅ Complete | 217 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, buffered+unbuffered channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os/strings/math/errors pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings.Builder, errors.New, fmt.Errorf |
+| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel (unbuffered+buffered ring buffer) + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get + golangc_string_decode_rune + strings package + math package + golangc_builder_{make,write_string,write_byte,string,reset,len} + golangc_errors_new + golangc_fmt_errorf |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
@@ -956,5 +956,74 @@
 - Math functions are direct `<cmath>` wrappers with no overhead.
 
 #### Next Steps
-- **Phase 20**: `strings.Builder`, `fmt.Fprintf` / `fmt.Errorf`, `errors.New`, buffered `make(chan T, n)`
+- **Phase 20**: `strings.Builder`, `fmt.Errorf`, `errors.New`, buffered `make(chan T, n)` ← COMPLETED
 - **Future**: Full `strings.Split/Join` with `[]string`, GC, self-hosting
+
+---
+
+### Session 20 — Phase 20: strings.Builder, errors.New/fmt.Errorf, buffered channels
+
+#### Completed
+
+- **`src/sema/universe.hpp`**: Added 8 new `BuiltinId` values: `StringsBuilderWriteString`, `StringsBuilderWriteByte`, `StringsBuilderString`, `StringsBuilderReset`, `StringsBuilderLen`, `ErrorsNew`, `FmtErrorf`. Added `strings_builder_ptr_type()` accessor.
+
+- **`src/sema/universe.cpp`**:
+  - Registered `errors` as `PseudoPkg`.
+  - Created `strings.Builder` as a `Named` type (name=`"strings.Builder"`, underlying=`uintptr`) with 5 pointer-receiver methods (`WriteString`, `WriteByte`, `String`, `Reset`, `Len`).
+  - Created `g_strings_builder_ptr_type` = `*strings.Builder` (pointer to Named type).
+  - `strings_builder_ptr_type()` accessor exposed.
+
+- **`src/sema/checker_type.cpp`**: Added `TypeExprKind::Qualified` case: `strings.Builder` → `strings_builder_ptr_type()`. Previously all qualified types errored with "not yet supported".
+
+- **`src/sema/checker_expr.cpp`**:
+  - Added `universe.hpp` include.
+  - Added `errors` block in `check_pseudo_pkg_selector`: `errors.New` → `BuiltinId::ErrorsNew`, type = `error`.
+  - Added `fmt.Errorf` → `BuiltinId::FmtErrorf`, type = `error`.
+  - In `check_selector`: when base type is `*strings.Builder` (Named with name `"strings.Builder"`), return Builtin symbol with name `"strings.Builder.WriteString"` etc. and correct return type (`nullptr`=void, `string`, `int`). This bypasses arg-count enforcement in `check_call`.
+
+- **`src/ir/ir_gen_expr.cpp`** — `gen_builtin_call`:
+  - Added `strings.Builder.*` block: dispatches on `builtin_name.compare(0,16,"strings.Builder.")` prefix. Extracts receiver from `call.func->selector.x`, calls `get_or_declare_runtime("golangc_builder_write_string/write_byte/string/reset/len", ...)`.
+  - Added `errors.New`: `golangc_errors_new(ptr, len)` → `interface` (sret 16 bytes).
+  - Added `fmt.Errorf`: `golangc_fmt_errorf(ptr, len, ...)` → `interface` (sret 16 bytes).
+  - In `make(chan T, n)`: extracts second arg `buf_cap` (from const_val or BasicLit). Passes to `create_chan_make(..., buf_cap, ...)`.
+  - Removed redundant Builder method dispatch fallback in `gen_call` (kept as dead code — builtins take precedence).
+
+- **`src/ir/ir_gen_stmt.cpp`** — `gen_local_var_spec`: Added zero-value init for `strings.Builder` typed vars (when no explicit initializer): detects `*strings.Builder` type, emits `golangc_builder_make()` call, stores result to alloca.
+
+- **`src/ir/ir_builder.hpp` / `ir_builder.cpp`**: `create_chan_make` takes new `int64_t buf_cap = 0` parameter; stored in `inst.field_index` (same pattern as MapMake's `val_size`).
+
+- **`src/codegen/x64_codegen_inst.cpp`** — `emit_chan_make`: Added `mov rdx, inst.field_index` before call → passes `buf_cap` as second arg (RDX) to `golangc_chan_make`.
+
+- **`src/runtime/runtime.hpp`**:
+  - Updated `golangc_chan_make` signature to `(int64_t elem_size, int64_t buffer_cap)`.
+  - Added `golangc_builder` forward decl + 5 builder function declarations.
+  - Added `golangc_errors_new` / `golangc_fmt_errorf` declarations.
+
+- **`src/runtime/runtime.cpp`**: Implemented `golangc_builder_{make,write_string,write_byte,string,reset,len}` using a growable heap buffer (`malloc/realloc`). Implemented `golangc_errors_new` (allocates `GoRuntimeString2`, writes `{tag=1, ptr}` to sret). Implemented `golangc_fmt_errorf` (format loop, wraps in error interface).
+
+- **`src/runtime/goroutine_channel.cpp`**: Rewrote to support both unbuffered and buffered channels. Unbuffered: existing two-semaphore rendezvous. Buffered: ring buffer + `not_full`/`not_empty` counting semaphores (POSIX semaphore style via Windows `CreateSemaphoreA`). `golangc_select` updated for both channel types.
+
+- **`tests/ir/test_ir.cpp`**: Fixed `create_chan_make` call-site to pass explicit `buf_cap=0`.
+
+- **`samples/builder_errors_demo.go`**: New sample demonstrating `strings.Builder`, `errors.New`, `fmt.Errorf`, buffered channels.
+
+- **12 new codegen tests** (205→217): `BuilderWriteAndString`, `BuilderMultipleWrites`, `BuilderReset`, `BuilderLen`, `ErrorsNewCompilesNoErrors`, `ErrorsNewEmitsRuntime`, `FmtErrorfCompilesNoErrors`, `FmtErrorfEmitsRuntime`, `BufferedChanMakeCompilesNoErrors`, `BufferedChanEmitsCapacity`, `ErrorReturnFromFunc`, `GoFull`.
+
+#### Current State
+- All 604 total tests pass (30+89+87+110+71+217)
+- `var b strings.Builder; b.WriteString(s); b.String()` compiles and emits correct runtime calls
+- `errors.New("msg")` returns error interface `{type_tag=1, *GoRuntimeString2}`; `err != nil` works
+- `fmt.Errorf("fmt", ...)` formats and wraps in error interface
+- `make(chan int, 5)` → buffered channel with ring buffer; no more blocking on sends up to capacity
+- Buffered channel send/recv use counting semaphores (`not_full`, `not_empty`)
+- `golangc_select` handles both unbuffered and buffered channels
+
+#### Design Notes
+- `strings.Builder` as a builtin (not a real named-type method dispatch) avoids needing IR function bodies for Builder methods. The `check_selector` returns a `Builtin` symbol → `check_call` accepts args permissively → `gen_builtin_call` extracts receiver from `call.func->selector.x`.
+- `errors.New` / `fmt.Errorf` return the error interface `{int64 type_tag, void* data}` via sret (16-byte struct). `nil` error is `{0, nullptr}`, real error is `{1, ptr}`.
+- Buffered channel `buf_cap` stored in `inst.field_index` of `ChanMake` instruction (same slot reuse as MapMake's `val_size`).
+- `strings_builder_ptr_type()` is a singleton set during `init_universe()`. `TypeExprKind::Qualified` in `resolve_type` handles `strings.Builder` in type position (`var b strings.Builder`).
+
+#### Next Steps
+- **Phase 21**: `io.Writer` / `io.Reader` interfaces, `os.Stdout/Stderr/Stdin`, `fmt.Fprintf`
+- **Future**: Full `strings.Split/Join`, GC, self-hosting

@@ -1,4 +1,5 @@
 #include "sema/checker.hpp"
+#include "sema/universe.hpp"
 
 #include <cstring>
 #include <fmt/format.h>
@@ -354,6 +355,19 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
             info.type = basic_type(BasicKind::String);
             return info;
         }
+        if (sel == "Errorf") {
+            info.symbol = make_member_builtin(BuiltinId::FmtErrorf);
+            info.type = error_type();
+            return info;
+        }
+    }
+
+    if (pkg == "errors") {
+        if (sel == "New") {
+            info.symbol = make_member_builtin(BuiltinId::ErrorsNew);
+            info.type = error_type();
+            return info;
+        }
     }
 
     if (pkg == "strconv") {
@@ -480,6 +494,42 @@ ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
         method = lookup_method(base, sel_name);
     }
     if (method) {
+        // strings.Builder methods: expose as builtin symbols so check_call
+        // accepts them permissively (no arg-count enforcement on runtime methods).
+        if (base->kind == TypeKind::Named && base->named &&
+            base->named->name == "strings.Builder") {
+            auto* str_ret  = basic_type(BasicKind::String);
+            auto* int_ret  = basic_type(BasicKind::Int);
+            static const struct {
+                std::string_view sel; BuiltinId id; int ret; // 0=void,1=str,2=int
+            } builder_map[] = {
+                {"WriteString", BuiltinId::StringsBuilderWriteString, 0},
+                {"WriteByte",   BuiltinId::StringsBuilderWriteByte,   0},
+                {"String",      BuiltinId::StringsBuilderString,      1},
+                {"Reset",       BuiltinId::StringsBuilderReset,        0},
+                {"Len",         BuiltinId::StringsBuilderLen,          2},
+            };
+            for (const auto& bm : builder_map) {
+                if (sel_name == bm.sel) {
+                    auto* sym = arena_.create<Symbol>();
+                    sym->kind = SymbolKind::Builtin;
+                    sym->builtin_id = static_cast<int>(bm.id);
+                    sym->used = true;
+                    // Stable name for IR dispatch: "strings.Builder.WriteString" etc.
+                    std::string full = "strings.Builder." + std::string(sel_name);
+                    auto* stored = arena_.allocate_array<char>(full.size() + 1);
+                    std::memcpy(stored, full.data(), full.size() + 1);
+                    sym->name = std::string_view(stored, full.size());
+                    info.symbol = sym;
+                    info.type = bm.ret == 1 ? str_ret
+                               : bm.ret == 2 ? int_ret
+                                             : nullptr;
+                    info.needs_addr_for_recv = false;
+                    return info;
+                }
+            }
+        }
+
         info.type = method;
         // Check if this is a pointer-receiver method called on a value type.
         // In that case, IR gen must take &recv before the call.

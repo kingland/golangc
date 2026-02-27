@@ -54,6 +54,16 @@ enum class BuiltinId : int {
     MathLog,   // math.Log(x float64) float64
     MathLog2,  // math.Log2(x float64) float64
     MathLog10, // math.Log10(x float64) float64
+    // strings.Builder methods (called on a *Builder receiver)
+    StringsBuilderWriteString, // b.WriteString(s string)
+    StringsBuilderWriteByte,   // b.WriteByte(c byte)
+    StringsBuilderString,      // b.String() string
+    StringsBuilderReset,       // b.Reset()
+    StringsBuilderLen,         // b.Len() int
+    // errors pseudo-package
+    ErrorsNew,   // errors.New(msg string) error
+    // fmt.Errorf
+    FmtErrorf,   // fmt.Errorf(format string, args...) error
     // Sentinel
     Count
 };
@@ -67,6 +77,10 @@ enum class BuiltinId : int {
 
 /// Get the predeclared 'error' interface type.
 [[nodiscard]] Type* error_type();
+
+/// Get the strings.Builder opaque pointer type (*strings.Builder).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* strings_builder_ptr_type();
 
 } // namespace sema
 } // namespace golangc

@@ -3492,4 +3492,207 @@ func main() {
     EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
 }
 
+// ============================================================================
+// Phase 20 Tests: strings.Builder, errors.New/fmt.Errorf, buffered channels
+// ============================================================================
+
+TEST(Phase20Test, BuilderWriteAndString) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    var b strings.Builder
+    b.WriteString("hello")
+    s := b.String()
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_builder_make"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_builder_write_string"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_builder_string"));
+}
+
+TEST(Phase20Test, BuilderMultipleWrites) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    var b strings.Builder
+    b.WriteString("foo")
+    b.WriteString(" ")
+    b.WriteString("bar")
+    _ = b.String()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_builder_write_string"));
+}
+
+TEST(Phase20Test, BuilderReset) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    var b strings.Builder
+    b.WriteString("hello")
+    b.Reset()
+    b.WriteString("world")
+    _ = b.String()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_builder_reset"));
+}
+
+TEST(Phase20Test, BuilderLen) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    var b strings.Builder
+    b.WriteString("hello")
+    n := b.Len()
+    _ = n
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_builder_len"));
+}
+
+TEST(Phase20Test, ErrorsNewCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "errors"
+func main() {
+    err := errors.New("something went wrong")
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase20Test, ErrorsNewEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "errors"
+func main() {
+    err := errors.New("oops")
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_errors_new"));
+}
+
+TEST(Phase20Test, FmtErrorfCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    err := fmt.Errorf("value %d is invalid", 42)
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase20Test, FmtErrorfEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    err := fmt.Errorf("bad: %d", 1)
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_fmt_errorf"));
+}
+
+TEST(Phase20Test, BufferedChanMakeCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int, 5)
+    _ = ch
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase20Test, BufferedChanEmitsCapacity) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int, 3)
+    _ = ch
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // field_index == 3 means "mov rdx, 3" should appear before golangc_chan_make
+    EXPECT_TRUE(contains(result.asm_text, "mov rdx, 3"));
+}
+
+TEST(Phase20Test, ErrorReturnFromFunc) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "errors"
+    "fmt"
+)
+func divide(a, b int) (int, error) {
+    if b == 0 {
+        return 0, errors.New("division by zero")
+    }
+    return a / b, nil
+}
+func main() {
+    result, err := divide(10, 2)
+    if err != nil {
+        fmt.Println("error")
+    } else {
+        fmt.Println(result)
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_errors_new"));
+}
+
+TEST(Phase20Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "errors"
+    "fmt"
+    "strings"
+)
+func main() {
+    var b strings.Builder
+    b.WriteString("hello")
+    b.WriteString(" world")
+    s := b.String()
+    _ = s
+
+    err := errors.New("test error")
+    _ = err
+
+    ch := make(chan int, 2)
+    ch <- 1
+    ch <- 2
+    v := <-ch
+    _ = v
+
+    e2 := fmt.Errorf("code %d", 42)
+    _ = e2
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_builder_make"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_errors_new"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_fmt_errorf"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
 

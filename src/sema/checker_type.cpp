@@ -1,4 +1,5 @@
 #include "sema/checker.hpp"
+#include "sema/universe.hpp"
 
 #include <fmt/format.h>
 
@@ -29,6 +30,10 @@ Type* Checker::resolve_type(ast::TypeExpr* texpr) {
 
         case ast::TypeExprKind::Qualified: {
             auto& qual = texpr->qualified;
+            // strings.Builder → opaque pointer type registered in universe
+            if (qual.package == "strings" && qual.name == "Builder") {
+                return strings_builder_ptr_type();
+            }
             diag_.error(qual.loc, "qualified types ({}.{}) not yet supported",
                        qual.package, qual.name);
             return nullptr;

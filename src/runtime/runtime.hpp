@@ -111,8 +111,9 @@ void golangc_slice_append(void* slice_out, const void* elem_ptr, int64_t elem_si
 
 struct golangc_chan;
 
-/// Create an unbuffered channel with the given element size in bytes.
-golangc_chan* golangc_chan_make(int64_t elem_size);
+/// Create a channel with the given element size in bytes.
+/// buffer_cap == 0 → unbuffered rendezvous; buffer_cap > 0 → buffered ring buffer.
+golangc_chan* golangc_chan_make(int64_t elem_size, int64_t buffer_cap);
 
 /// Send val_ptr to ch (blocks until receiver consumes).
 void golangc_chan_send(golangc_chan* ch, void* val_ptr);
@@ -237,6 +238,36 @@ double golangc_math_log(double x);
 double golangc_math_log2(double x);
 /// math.Log10
 double golangc_math_log10(double x);
+
+// ---- strings.Builder ----
+
+struct golangc_builder;
+
+/// Create a new strings.Builder (empty).
+golangc_builder* golangc_builder_make(void);
+
+/// Append a string (ptr + len) to the builder.
+void golangc_builder_write_string(golangc_builder* b, const char* ptr, int64_t len);
+
+/// Append a single byte to the builder.
+void golangc_builder_write_byte(golangc_builder* b, int64_t byte_val);
+
+/// Return the accumulated string via sret (16-byte {ptr, len} buffer).
+void golangc_builder_string(char* sret_out, golangc_builder* b);
+
+/// Reset the builder to empty.
+void golangc_builder_reset(golangc_builder* b);
+
+/// Return the current length of the builder content.
+int64_t golangc_builder_len(golangc_builder* b);
+
+// ---- errors package ----
+
+/// errors.New(msg string) error — returns interface{type_tag=1, data_ptr} via sret.
+void golangc_errors_new(char* sret_out, const char* msg_ptr, int64_t msg_len);
+
+/// fmt.Errorf(format string, ...) error — formatted error via sret.
+void golangc_fmt_errorf(char* sret_out, const char* fmt_ptr, int64_t fmt_len, ...);
 
 } // extern "C"
 

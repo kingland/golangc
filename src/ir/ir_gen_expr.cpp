@@ -466,6 +466,27 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
     if (!method_name.empty()) {
         auto it = func_name_map_.find(method_name);
         if (it != func_name_map_.end()) callee = it->second;
+
+        // strings.Builder method dispatch — map to runtime functions
+        if (!callee) {
+            struct BuilderMethod { const char* suffix; const char* runtime_fn; bool returns_string; bool returns_int; };
+            static const BuilderMethod builder_methods[] = {
+                {"strings.Builder.WriteString", "golangc_builder_write_string", false, false},
+                {"strings.Builder.WriteByte",   "golangc_builder_write_byte",   false, false},
+                {"strings.Builder.String",      "golangc_builder_string",       true,  false},
+                {"strings.Builder.Reset",       "golangc_builder_reset",        false, false},
+                {"strings.Builder.Len",         "golangc_builder_len",          false, true},
+            };
+            for (const auto& bm : builder_methods) {
+                if (method_name == bm.suffix) {
+                    IRType* ret = bm.returns_string ? type_map_.string_type()
+                                : bm.returns_int    ? type_map_.i64_type()
+                                                    : type_map_.void_type();
+                    callee = get_or_declare_runtime(bm.runtime_fn, ret);
+                    break;
+                }
+            }
+        }
     }
     if (!callee) callee = gen_expr(call.func);
     if (!callee) return builder_.create_const_int(type_map_.i64_type(), 0, "bad_call");
@@ -1318,7 +1339,21 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
                         }
                     }
                 }
-                return builder_.create_chan_make(type_map_.ptr_type(), elem_size, "make");
+                // Extract optional buffer capacity: make(chan T, n)
+                int64_t buf_cap = 0;
+                if (call.args.count >= 2) {
+                    auto* cap_info = expr_info(call.args[1]);
+                    if (cap_info && cap_info->const_val && cap_info->const_val->is_int()) {
+                        buf_cap = cap_info->const_val->as_int();
+                    } else if (call.args[1]->kind == ast::ExprKind::BasicLit) {
+                        // Try to parse as integer literal directly
+                        auto& lit = call.args[1]->basic_lit;
+                        if (lit.kind == TokenKind::IntLiteral) {
+                            buf_cap = std::stoll(std::string(lit.value));
+                        }
+                    }
+                }
+                return builder_.create_chan_make(type_map_.ptr_type(), elem_size, buf_cap, "make");
             }
             if (t->kind == sema::TypeKind::Map) {
                 int64_t key_sz = 8, val_sz = 8;
@@ -1373,6 +1408,72 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
 
     if (builtin_name == "recover") {
         return builder_.create_const_nil(type_map_.interface_type(), "recover");
+    }
+
+    // ---- strings.Builder methods ----
+    // These are dispatched as builtins; extract receiver from call.func->selector.x
+    if (builtin_name.size() > 16 &&
+        builtin_name.compare(0, 16, "strings.Builder.") == 0) {
+        Value* recv = nullptr;
+        if (call.func->kind == ast::ExprKind::Selector) {
+            recv = gen_expr(call.func->selector.x);
+        }
+        if (!recv) return builder_.create_const_int(type_map_.i64_type(), 0, "builder.norecv");
+
+        if (builtin_name == "strings.Builder.WriteString") {
+            Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!s) return builder_.create_const_int(type_map_.i64_type(), 0, "builder.noarg");
+            auto* fn = get_or_declare_runtime("golangc_builder_write_string", type_map_.void_type());
+            return builder_.create_call(fn, {recv, s}, type_map_.void_type(), "WriteString");
+        }
+        if (builtin_name == "strings.Builder.WriteByte") {
+            Value* b_val = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!b_val) return builder_.create_const_int(type_map_.i64_type(), 0, "builder.noarg");
+            auto* fn = get_or_declare_runtime("golangc_builder_write_byte", type_map_.void_type());
+            return builder_.create_call(fn, {recv, b_val}, type_map_.void_type(), "WriteByte");
+        }
+        if (builtin_name == "strings.Builder.String") {
+            auto* fn = get_or_declare_runtime("golangc_builder_string", type_map_.string_type());
+            return builder_.create_call(fn, {recv}, type_map_.string_type(), "String");
+        }
+        if (builtin_name == "strings.Builder.Reset") {
+            auto* fn = get_or_declare_runtime("golangc_builder_reset", type_map_.void_type());
+            return builder_.create_call(fn, {recv}, type_map_.void_type(), "Reset");
+        }
+        if (builtin_name == "strings.Builder.Len") {
+            auto* fn = get_or_declare_runtime("golangc_builder_len", type_map_.i64_type());
+            return builder_.create_call(fn, {recv}, type_map_.i64_type(), "Len");
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "builder.unknown");
+    }
+
+    // ---- errors.New(msg) → golangc_errors_new(ptr, len) returns interface via sret ----
+    if (builtin_name == "errors.New") {
+        if (call.args.count >= 1) {
+            auto* msg = gen_expr(call.args[0]);
+            if (msg) {
+                auto* fn = get_or_declare_runtime("golangc_errors_new", type_map_.interface_type());
+                return builder_.create_call(fn, {msg}, type_map_.interface_type(), "errors.New");
+            }
+        }
+        return builder_.create_const_nil(type_map_.interface_type(), "errors.New.nil");
+    }
+
+    // ---- fmt.Errorf(fmt, ...) → golangc_fmt_errorf(ptr, len, ...) returns interface via sret ----
+    if (builtin_name == "fmt.Errorf") {
+        if (call.args.count >= 1) {
+            auto* fmt_val = gen_expr(call.args[0]);
+            if (fmt_val) {
+                auto* fn = get_or_declare_runtime("golangc_fmt_errorf", type_map_.interface_type());
+                std::vector<Value*> args = {fmt_val};
+                for (uint32_t i = 1; i < call.args.count; ++i) {
+                    auto* a = gen_expr(call.args[i]);
+                    if (a) args.push_back(a);
+                }
+                return builder_.create_call(fn, args, type_map_.interface_type(), "fmt.Errorf");
+            }
+        }
+        return builder_.create_const_nil(type_map_.interface_type(), "fmt.Errorf.nil");
     }
 
     return builder_.create_const_int(type_map_.i64_type(), 0, "builtin.todo");

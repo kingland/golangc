@@ -390,9 +390,10 @@ Instruction* IRBuilder::create_defer_call(Value* callee, const std::vector<Value
 }
 
 Instruction* IRBuilder::create_chan_make(IRType* chan_type, int64_t elem_size,
-                                         const std::string& name) {
+                                         int64_t buf_cap, const std::string& name) {
     auto* inst = emit(Opcode::ChanMake, chan_type, name);
-    inst->imm_int = elem_size;
+    inst->imm_int    = elem_size;
+    inst->field_index = static_cast<uint32_t>(buf_cap); // reuse field_index for buf_cap
     return inst;
 }
 

@@ -1021,6 +1021,24 @@ void IRGenerator::gen_local_var_spec(ast::VarSpec& spec) {
             if (val) {
                 builder_.create_store(val, alloca);
             }
+        } else {
+            // Zero-value init: strings.Builder → call golangc_builder_make()
+            if (sym->type) {
+                auto* st = sema::underlying(sym->type);
+                bool is_builder = st &&
+                    st->kind == sema::TypeKind::Pointer &&
+                    st->pointer.base &&
+                    st->pointer.base->kind == sema::TypeKind::Named &&
+                    st->pointer.base->named &&
+                    st->pointer.base->named->name == "strings.Builder";
+                if (is_builder) {
+                    auto* fn = get_or_declare_runtime("golangc_builder_make",
+                                                      type_map_.ptr_type());
+                    auto* ptr = builder_.create_call(fn, {}, type_map_.ptr_type(),
+                                                     "builder.make");
+                    builder_.create_store(ptr, alloca);
+                }
+            }
         }
     }
 }

@@ -15,6 +15,9 @@ bool g_basic_types_initialized = false;
 // Singleton error type
 Type* g_error_type = nullptr;
 
+// Singleton strings.Builder pointer type (*strings.Builder)
+Type* g_strings_builder_ptr_type = nullptr;
+
 void ensure_basic_types_initialized() {
     if (g_basic_types_initialized) return;
     g_basic_types_initialized = true;
@@ -75,6 +78,10 @@ Type* basic_type(BasicKind kind) {
 
 Type* error_type() {
     return g_error_type;
+}
+
+Type* strings_builder_ptr_type() {
+    return g_strings_builder_ptr_type;
 }
 
 Scope* init_universe(ArenaAllocator& arena) {
@@ -168,6 +175,7 @@ Scope* init_universe(ArenaAllocator& arena) {
     (void)scope->insert(make_pseudo_pkg("os"));
     (void)scope->insert(make_pseudo_pkg("strings"));
     (void)scope->insert(make_pseudo_pkg("math"));
+    (void)scope->insert(make_pseudo_pkg("errors"));
 
     // ---- error interface type ----
     // type error interface { Error() string }
@@ -182,6 +190,58 @@ Scope* init_universe(ArenaAllocator& arena) {
     g_error_type = error_ty;
 
     (void)scope->insert(make_type_symbol(arena, "error", error_ty));
+
+    // ---- strings.Builder opaque named type ----
+    // Implemented as an opaque pointer in the runtime (like golangc_map).
+    // We represent it as a Named type wrapping a pointer-to-void (uintptr).
+    // The pointer type itself is what user code holds.
+    auto* builder_underlying = arena.create<Type>();
+    builder_underlying->kind = TypeKind::Basic;
+    builder_underlying->basic = BasicKind::Uintptr; // opaque handle
+
+    auto* builder_named = arena.create<NamedType>();
+    builder_named->name = "strings.Builder";
+    builder_named->underlying = builder_underlying;
+    // Register pointer-receiver methods on the Named type.
+    // We register them with pointer_receiver=true; the IR dispatch
+    // detects "strings.Builder.X" and calls the runtime.
+    auto make_method = [&](std::string_view name, Type* func_type) {
+        builder_named->methods.push_back(NamedType::Method{name, func_type, true});
+    };
+    // Build minimal func types for each method (return types used in sema checks).
+    auto* void_ft = arena.create<FuncType>();
+    auto* string_ft_raw = arena.create<FuncType>();
+    string_ft_raw->results.push_back(FuncParam{"", basic_type(BasicKind::String)});
+    auto* int_ft_raw = arena.create<FuncType>();
+    int_ft_raw->results.push_back(FuncParam{"", basic_type(BasicKind::Int)});
+
+    auto* void_ty = arena.create<Type>();
+    void_ty->kind = TypeKind::Func;
+    void_ty->func = void_ft;
+
+    auto* str_ty2 = arena.create<Type>();
+    str_ty2->kind = TypeKind::Func;
+    str_ty2->func = string_ft_raw;
+
+    auto* int_ty2 = arena.create<Type>();
+    int_ty2->kind = TypeKind::Func;
+    int_ty2->func = int_ft_raw;
+
+    make_method("WriteString", void_ty);
+    make_method("WriteByte",   void_ty);
+    make_method("String",      str_ty2);
+    make_method("Reset",       void_ty);
+    make_method("Len",         int_ty2);
+
+    auto* builder_named_ty = arena.create<Type>();
+    builder_named_ty->kind = TypeKind::Named;
+    builder_named_ty->named = builder_named;
+
+    auto* builder_ptr_ty = arena.create<Type>();
+    builder_ptr_ty->kind = TypeKind::Pointer;
+    builder_ptr_ty->pointer.base = builder_named_ty;
+
+    g_strings_builder_ptr_type = builder_ptr_ty;
 
     return scope;
 }

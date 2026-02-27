@@ -1463,10 +1463,11 @@ void X64CodeGenerator::emit_defer_call(const ir::Instruction& inst) {
 // Channel / Goroutine operations
 // ============================================================================
 
-// emit_chan_make: call golangc_chan_make(elem_size) → ptr in temp slot
+// emit_chan_make: call golangc_chan_make(elem_size, buf_cap) → ptr in temp slot
 void X64CodeGenerator::emit_chan_make(const ir::Instruction& inst) {
     auto slot = get_temp_slot(inst.id);
-    emit(fmt::format("mov rcx, {}", inst.imm_int));
+    emit(fmt::format("mov rcx, {}", inst.imm_int));       // elem_size → RCX
+    emit(fmt::format("mov rdx, {}", inst.field_index));   // buf_cap → RDX
     emit("sub rsp, 32");
     emit("call golangc_chan_make");
     emit("add rsp, 32");
