@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 17 (Named Types, Pointer Receivers, Iota) - Complete
-## Current Milestone: Phase 17 complete - pointer-receiver methods on value types (auto-&recv at call site), iota const evaluation with implicit spec repetition, method calls on named-type constants (South.Name()), 10 new NamedTypeTest tests — namedtypes.go sample added (181 codegen tests, 568 total)
-## Completion Estimate: 75%
+## Current Phase: 18 (Pseudo-packages: fmt, strconv, os) - Complete
+## Current Milestone: Phase 18 complete - fmt.Println/Printf/Sprintf, strconv.Itoa/Atoi, os.Args, string(int) rune-to-string conversion, 11 new PseudoPkgTest tests — strconv_demo.go sample added (192 codegen tests, 579 total)
+## Completion Estimate: 80%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -14,8 +14,8 @@
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T in call args fixed |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction; spread type check fix; unused param false positive fix |
 | IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq, make_array_type public |
-| CodeGen | ✅ Complete | 181 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants |
-| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select |
+| CodeGen | ✅ Complete | 192 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os pseudo-packages, rune-to-string |
+| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
@@ -829,4 +829,60 @@
 
 #### Next Steps
 - **Phase 18**: String formatting, `fmt.Println`, package imports
+- **Future**: Buffered channels, GC, self-hosting
+
+---
+
+### Session 18 — Phase 18: Pseudo-packages (fmt, strconv, os) + rune-to-string
+
+#### Completed
+
+- **`src/sema/scope.hpp`**: Added `SymbolKind::PseudoPkg` and `pkg_name` field to `Symbol`.
+
+- **`src/sema/universe.hpp`**: Added new `BuiltinId` values: `FmtPrintln`, `FmtPrintf`, `FmtSprintf`, `StrconvItoa`, `StrconvAtoi`, `OsArgs`.
+
+- **`src/sema/universe.cpp`**: Registered `fmt`, `strconv`, `os` as `PseudoPkg` symbols in the universe scope — always available without an explicit `import`.
+
+- **`src/sema/checker.hpp`**: Added `check_pseudo_pkg_selector` declaration.
+
+- **`src/sema/checker_expr.cpp`**:
+  - New `check_pseudo_pkg_selector`: handles `fmt.{Println,Printf,Sprintf}`, `strconv.{Itoa,Atoi}`, `os.Args` — creates arena-stored `Builtin` symbols with correct return types (`string`, `(int,error)` tuple, `[]string`).
+  - `check_selector`: early-exit for `PseudoPkg` receiver before the normal field/method path; records the package ident as resolved.
+  - `check_call`: after `check_expr(expr.func)`, detects `Builtin` symbol on the result and routes args through permissive type-checking, returning the correct result type.
+
+- **`src/ir/ir_gen.hpp`**: Added `get_or_declare_runtime` helper declaration.
+
+- **`src/ir/ir_gen_expr.cpp`**:
+  - `get_or_declare_runtime`: lazily forward-declares external runtime functions in `func_name_map_` so `emit_call` resolves them correctly.
+  - `gen_builtin_call`: new cases for `fmt.Println` (reuses `Println` opcode), `fmt.Printf` → `golangc_printf`, `fmt.Sprintf` → `golangc_sprintf`, `strconv.Itoa` → `golangc_itoa`, `strconv.Atoi` → `golangc_atoi` + tuple pack, `os.Args` → `golangc_os_args_get`.
+  - `gen_selector`: detects `os.Args` builtin on the selector ExprInfo (non-call value access) and emits `golangc_os_args_get()`.
+  - `gen_call` type-conversion: `string(int)` now calls `golangc_rune_to_string` instead of doing a bitcast.
+
+- **`src/runtime/runtime.hpp` / `runtime.cpp`**: Added:
+  - `golangc_itoa(sret, int64)` — integer → string via `snprintf`
+  - `golangc_atoi(ptr, len, out_ok)` — string → integer via `strtoll`
+  - `golangc_sprintf(sret, fmt_ptr, fmt_len, ...)` — custom format loop supporting `%d`, `%s`, `%f`/`%g`
+  - `golangc_printf(fmt_ptr, fmt_len, ...)` — same but writes to stdout
+  - `golangc_rune_to_string(sret, rune)` — UTF-8 encodes a Unicode code point
+  - `golangc_os_args`, `golangc_init_args(argc, argv)`, `golangc_os_args_get(sret)` — os.Args infrastructure
+
+- **`samples/strconv_demo.go`**: New sample demonstrating `strconv.Itoa`, `strconv.Atoi`, `fmt.Sprintf`, `string(int)`, `os.Args`.
+
+- **11 new codegen tests** (181→192): `FmtPrintlnInt`, `FmtPrintlnString`, `FmtPrintlnNoImport`, `StrconvItoa`, `StrconvAtoiCompilesNoErrors`, `FmtSprintf`, `FmtPrintf`, `RuneToString`, `OsArgs`, `FmtPrintlnMultiArg`, `GoFull`.
+
+#### Current State
+- All 579 total tests pass (30+89+87+110+71+192)
+- `fmt.Println` / `fmt.Printf` / `fmt.Sprintf` work without a real import system
+- `strconv.Itoa` / `strconv.Atoi` compile and emit correct runtime calls
+- `string(65)` produces a valid UTF-8 string via `golangc_rune_to_string`
+- `os.Args` loads the runtime-initialized `[]string` via `golangc_os_args_get`
+- Import declarations (`import "fmt"` etc.) are silently accepted (not required)
+
+#### Design Notes
+- Pseudo-package approach chosen over a real package system: `fmt`/`strconv`/`os` registered as `PseudoPkg` in the universe scope, members resolved to `Builtin` symbols in `check_pseudo_pkg_selector`. Adds zero parsing complexity, minimal sema complexity.
+- `fmt.Sprintf` uses a custom format loop (`fmt_custom` in runtime) that handles Go's `{ptr,len}` string representation — standard `vsnprintf` cannot be used directly since `%s` expects null-terminated pointers.
+- `strconv.Atoi` returns a 2-field IR struct `{i64, interface}` matching the `(int, error)` Tuple expected by short-var-decl destructuring.
+
+#### Next Steps
+- **Phase 19**: `for range` over strings (UTF-8 rune iteration), string formatting improvements
 - **Future**: Buffered channels, GC, self-hosting

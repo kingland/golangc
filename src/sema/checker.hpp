@@ -149,6 +149,9 @@ private:
     Type* make_interface_type(InterfaceType* it);
     Type* make_tuple_type(const std::vector<Type*>& types);
 
+    // ---- Pseudo-package selector handling ----
+    ExprInfo check_pseudo_pkg_selector(const Symbol& pkg_sym, ast::SelectorExpr& expr);
+
     // ---- Interface satisfaction ----
     bool satisfies_interface(Type* concrete, InterfaceType* iface);
     Type* lookup_method(Type* t, std::string_view name);

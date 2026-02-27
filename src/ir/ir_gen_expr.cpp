@@ -365,6 +365,26 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
             auto* val = gen_expr(call.args[0]);
             if (!val) return builder_.create_const_int(type_map_.i64_type(), 0);
             IRType* target_type = map_sema_type(func_sym->type);
+
+            // Special case: string(int) — rune to string via golangc_rune_to_string
+            if (func_sym->type && sema::is_string(func_sym->type)) {
+                auto* arg_sema = expr_info(call.args[0]);
+                bool src_is_int = arg_sema && arg_sema->type &&
+                                  sema::underlying(arg_sema->type)->kind == sema::TypeKind::Basic &&
+                                  sema::is_integer(arg_sema->type);
+                if (src_is_int) {
+                    auto* fn = get_or_declare_runtime("golangc_rune_to_string",
+                                                       type_map_.string_type());
+                    // Truncate to i32 if needed (rune is int32)
+                    Value* rune_val = val;
+                    if (val->type && val->type->kind != IRTypeKind::I32) {
+                        rune_val = builder_.create_bitcast(val, type_map_.i32_type(), "rune");
+                    }
+                    return builder_.create_call(fn, {rune_val},
+                                                type_map_.string_type(), "rune2str");
+                }
+            }
+
             if (val->type == target_type) return val;
 
             bool src_float = val->type && val->type->is_float();
@@ -562,9 +582,19 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
 
 Value* IRGenerator::gen_selector(ast::Expr* expr) {
     auto& sel = expr->selector;
+
+    // Check for pseudo-package value access (e.g. os.Args which is not a call).
+    auto* info = expr_info(expr);
+    if (info && info->symbol && info->symbol->kind == sema::SymbolKind::Builtin) {
+        auto bname = info->symbol->name;
+        if (bname == "os.Args") {
+            auto* fn = get_or_declare_runtime("golangc_os_args_get", type_map_.slice_type());
+            return builder_.create_call(fn, {}, type_map_.slice_type(), "os.Args");
+        }
+    }
+
     auto* addr = gen_addr(expr);
     if (addr) {
-        auto* info = expr_info(expr);
         IRType* field_type = type_map_.i64_type();
         if (info && info->type) field_type = map_sema_type(info->type);
         return builder_.create_load(addr, field_type, std::string(sel.sel->name));
@@ -990,10 +1020,114 @@ Value* IRGenerator::gen_func_lit(ast::Expr* expr) {
     return builder_.create_closure_make(lit_func, env_ptr_val, lit_name + ".val");
 }
 
+// ---------------------------------------------------------------------------
+// get_or_declare_runtime: look up or forward-declare a runtime function
+// ---------------------------------------------------------------------------
+
+Function* IRGenerator::get_or_declare_runtime(const std::string& name, IRType* ret_type) {
+    auto it = func_name_map_.find(name);
+    if (it != func_name_map_.end()) return it->second;
+
+    // Create an external function declaration (no body).
+    auto* f = module_->create_function(builder_.next_id(),
+                                        ret_type ? ret_type : type_map_.void_type(),
+                                        name);
+    f->return_type = ret_type ? ret_type : type_map_.void_type();
+    func_name_map_[name] = f;
+    return f;
+}
+
 Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func_info) {
     auto& call = expr->call;
     auto* call_info = expr_info(expr);
     auto builtin_name = func_info->symbol->name;
+
+    // ---- fmt.Println — reuse the existing Println IR opcode ----
+    if (builtin_name == "fmt.Println") {
+        std::vector<Value*> args;
+        for (auto* arg_expr : call.args) {
+            auto* arg = gen_expr(arg_expr);
+            if (arg) args.push_back(arg);
+        }
+        return builder_.create_println(args);
+    }
+
+    // ---- fmt.Printf — call golangc_printf(fmt_ptr, fmt_len, ...) ----
+    if (builtin_name == "fmt.Printf") {
+        if (call.args.count >= 1) {
+            auto* fmt_val = gen_expr(call.args[0]);
+            if (fmt_val) {
+                auto* fn = get_or_declare_runtime("golangc_printf", type_map_.void_type());
+                std::vector<Value*> args = {fmt_val};
+                for (uint32_t i = 1; i < call.args.count; ++i) {
+                    auto* a = gen_expr(call.args[i]);
+                    if (a) args.push_back(a);
+                }
+                return builder_.create_call(fn, args, type_map_.void_type(), "printf");
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "printf.nop");
+    }
+
+    // ---- fmt.Sprintf — call golangc_sprintf via sret, returns string ----
+    if (builtin_name == "fmt.Sprintf") {
+        if (call.args.count >= 1) {
+            auto* fmt_val = gen_expr(call.args[0]);
+            if (fmt_val) {
+                auto* fn = get_or_declare_runtime("golangc_sprintf", type_map_.string_type());
+                std::vector<Value*> args = {fmt_val};
+                for (uint32_t i = 1; i < call.args.count; ++i) {
+                    auto* a = gen_expr(call.args[i]);
+                    if (a) args.push_back(a);
+                }
+                return builder_.create_call(fn, args, type_map_.string_type(), "sprintf");
+            }
+        }
+        return builder_.create_const_string("", "sprintf.empty");
+    }
+
+    // ---- strconv.Itoa — call golangc_itoa(n), returns string ----
+    if (builtin_name == "strconv.Itoa") {
+        if (call.args.count >= 1) {
+            auto* n = gen_expr(call.args[0]);
+            if (n) {
+                auto* fn = get_or_declare_runtime("golangc_itoa", type_map_.string_type());
+                return builder_.create_call(fn, {n}, type_map_.string_type(), "itoa");
+            }
+        }
+        return builder_.create_const_string("0", "itoa.zero");
+    }
+
+    // ---- strconv.Atoi — call golangc_atoi(ptr, len, nullptr), returns (int, error) ----
+    if (builtin_name == "strconv.Atoi") {
+        if (call.args.count >= 1) {
+            auto* s = gen_expr(call.args[0]);
+            if (s) {
+                // Pass a null pointer for out_ok (error ignored; 0 = success)
+                auto* null_ok = builder_.create_const_nil(type_map_.ptr_type(), "no.ok");
+                auto* fn = get_or_declare_runtime("golangc_atoi", type_map_.i64_type());
+                auto* int_val = builder_.create_call(fn, {s, null_ok},
+                                                      type_map_.i64_type(), "atoi");
+                // Build a 2-field struct {i64, interface} = {int_val, nil_error}
+                // to match the (int, error) tuple expected by the caller.
+                auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+                std::vector<IRType*> fields = {type_map_.i64_type(), type_map_.interface_type()};
+                IRType* tuple_ir = type_map_.make_tuple_type(std::move(fields));
+                auto* packed = builder_.create_const_nil(tuple_ir, "atoi.pack");
+                packed = builder_.create_insert_value(packed, int_val, 0, "atoi.pack");
+                packed = builder_.create_insert_value(packed, nil_err, 1, "atoi.pack");
+                return packed;
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "atoi.zero");
+    }
+
+    // ---- os.Args — call golangc_os_args_get() which loads the global slice ----
+    if (builtin_name == "os.Args") {
+        // Emit a call to a tiny wrapper that returns the os.Args slice by value.
+        auto* fn = get_or_declare_runtime("golangc_os_args_get", type_map_.slice_type());
+        return builder_.create_call(fn, {}, type_map_.slice_type(), "os.Args");
+    }
 
     if (builtin_name == "println" || builtin_name == "print") {
         std::vector<Value*> args;

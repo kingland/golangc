@@ -151,6 +151,22 @@ Scope* init_universe(ArenaAllocator& arena) {
         (void)scope->insert(make_builtin_symbol(arena, entry.name, entry.id));
     }
 
+    // ---- Pseudo-packages (fmt, strconv, os) ----
+    // These are always in scope so that fmt.Println etc. work without
+    // a real package system. An explicit `import "fmt"` is not required
+    // (and import declarations are currently ignored by the checker).
+    auto make_pseudo_pkg = [&](std::string_view name) -> Symbol* {
+        auto* sym = arena.create<Symbol>();
+        sym->kind = SymbolKind::PseudoPkg;
+        sym->name = name;
+        sym->pkg_name = name;
+        sym->used = true;
+        return sym;
+    };
+    (void)scope->insert(make_pseudo_pkg("fmt"));
+    (void)scope->insert(make_pseudo_pkg("strconv"));
+    (void)scope->insert(make_pseudo_pkg("os"));
+
     // ---- error interface type ----
     // type error interface { Error() string }
     auto* error_iface = arena.create<InterfaceType>();

@@ -31,6 +31,7 @@ enum class SymbolKind : uint8_t {
     Package,
     Builtin,
     Nil,
+    PseudoPkg, // Recognized pseudo-package (fmt, strconv, os) — not a real import
 };
 
 /// Forward declare ConstValue
@@ -54,6 +55,9 @@ struct Symbol {
 
     // For built-in functions: an ID to identify which builtin
     int builtin_id = -1;
+
+    // For PseudoPkg symbols: the package name (e.g. "fmt", "strconv", "os")
+    std::string_view pkg_name;
 };
 
 // ============================================================================

@@ -58,6 +58,10 @@ private:
     const sema::ExprInfo* expr_info(const ast::Expr* expr);
     sema::Type* expr_type(const ast::Expr* expr);
 
+    /// Look up or declare an external runtime function.
+    /// The function is registered in func_name_map_ as a forward declaration.
+    Function* get_or_declare_runtime(const std::string& name, IRType* ret_type);
+
     // ---- Declaration generation (ir_gen_decl.cpp) ----
     void gen_file(ast::File* file);
     void register_functions(ast::File* file);

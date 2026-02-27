@@ -3129,4 +3129,157 @@ func main() {
     EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
 }
 
+// ============================================================================
+// Phase 18: Pseudo-packages (fmt, strconv, os) + rune-to-string
+// ============================================================================
+
+TEST(PseudoPkgTest, FmtPrintlnInt) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    fmt.Println(42)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_println_int"));
+}
+
+TEST(PseudoPkgTest, FmtPrintlnString) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    fmt.Println("hello world")
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_println_string"));
+}
+
+TEST(PseudoPkgTest, FmtPrintlnNoImport) {
+    // fmt is always in scope — import is optional for our pseudo-package system
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    fmt.Println(123)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_println_int"));
+}
+
+TEST(PseudoPkgTest, StrconvItoa) {
+    auto result = compile_to_asm(R"(
+package main
+import "strconv"
+func main() {
+    s := strconv.Itoa(42)
+    println(s)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_itoa"));
+}
+
+TEST(PseudoPkgTest, StrconvAtoiCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strconv"
+func main() {
+    n, _ := strconv.Atoi("123")
+    println(n)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_atoi"));
+}
+
+TEST(PseudoPkgTest, FmtSprintf) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    s := fmt.Sprintf("%d", 42)
+    println(s)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(PseudoPkgTest, FmtPrintf) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    fmt.Printf("%d\n", 99)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_printf"));
+}
+
+TEST(PseudoPkgTest, RuneToString) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    s := string(65)
+    println(s)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_rune_to_string"));
+}
+
+TEST(PseudoPkgTest, OsArgs) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    args := os.Args
+    println(len(args))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_args_get"));
+}
+
+TEST(PseudoPkgTest, FmtPrintlnMultiArg) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    x := 10
+    y := 20
+    fmt.Println(x, y)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(PseudoPkgTest, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "strconv"
+)
+func main() {
+    n := 42
+    s := strconv.Itoa(n)
+    fmt.Println("n=" + s)
+    msg := fmt.Sprintf("value: %d", n)
+    fmt.Println(msg)
+    ch := string(65)
+    fmt.Println(ch)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_itoa"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_rune_to_string"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
 

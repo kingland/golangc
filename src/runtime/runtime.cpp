@@ -1,5 +1,6 @@
 #include "runtime/runtime.hpp"
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -340,6 +341,192 @@ void golangc_map_set(golangc_map* m, void* key_ptr, void* val_ptr) {
         }
         idx = (idx + 1) & (m->capacity - 1);
     }
+}
+
+// ============================================================================
+// String conversion (strconv)
+// ============================================================================
+
+// golangc_itoa: int64 → string, returned via sret (16-byte {ptr, len} buffer).
+void golangc_itoa(char* sret_out, int64_t value) {
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(value));
+    if (len < 0) len = 0;
+    char* s = static_cast<char*>(malloc(static_cast<size_t>(len) + 1));
+    if (s) {
+        memcpy(s, buf, static_cast<size_t>(len) + 1);
+    }
+    *reinterpret_cast<char**>(sret_out) = s;
+    *reinterpret_cast<int64_t*>(sret_out + 8) = static_cast<int64_t>(len);
+}
+
+// golangc_atoi: string (ptr+len) → int64. Sets *out_ok (1=success, 0=failure).
+int64_t golangc_atoi(const char* ptr, int64_t len, int64_t* out_ok) {
+    if (!ptr || len <= 0) {
+        if (out_ok) *out_ok = 0;
+        return 0;
+    }
+    char buf[64];
+    if (len >= static_cast<int64_t>(sizeof(buf))) {
+        if (out_ok) *out_ok = 0;
+        return 0;
+    }
+    memcpy(buf, ptr, static_cast<size_t>(len));
+    buf[len] = '\0';
+    char* end = nullptr;
+    long long val = strtoll(buf, &end, 10);
+    if (out_ok) *out_ok = (end == buf + len) ? 1 : 0;
+    return static_cast<int64_t>(val);
+}
+
+// ============================================================================
+// String formatting (fmt)
+// ============================================================================
+
+// Custom format loop — handles Go's {ptr,len} string representation.
+// Supports %d (int64), %s (string ptr+len), %v (same as %d for numbers).
+// buf/buf_cap: output buffer; returns bytes written.
+static int fmt_custom(char* buf, int buf_cap,
+                      const char* fmt_ptr, int64_t fmt_len,
+                      va_list ap) {
+    int out = 0;
+    for (int64_t i = 0; i < fmt_len && out < buf_cap - 1; ) {
+        char c = fmt_ptr[i++];
+        if (c != '%') {
+            buf[out++] = c;
+            continue;
+        }
+        if (i >= fmt_len) break;
+        char verb = fmt_ptr[i++];
+        if (verb == '%') {
+            buf[out++] = '%';
+            continue;
+        }
+        if (verb == 'd' || verb == 'v') {
+            int64_t n = va_arg(ap, int64_t);
+            char tmp[32];
+            int w = snprintf(tmp, sizeof(tmp), "%lld", static_cast<long long>(n));
+            if (w > 0 && out + w < buf_cap) {
+                memcpy(buf + out, tmp, static_cast<size_t>(w));
+                out += w;
+            }
+        } else if (verb == 's') {
+            const char* sp = va_arg(ap, const char*);
+            int64_t sl = va_arg(ap, int64_t);
+            if (sp && sl > 0) {
+                int copy = (int)sl;
+                if (out + copy >= buf_cap) copy = buf_cap - out - 1;
+                memcpy(buf + out, sp, static_cast<size_t>(copy));
+                out += copy;
+            }
+        } else if (verb == 'f' || verb == 'g') {
+            double d = va_arg(ap, double);
+            char tmp[64];
+            int w = snprintf(tmp, sizeof(tmp), verb == 'f' ? "%f" : "%g", d);
+            if (w > 0 && out + w < buf_cap) {
+                memcpy(buf + out, tmp, static_cast<size_t>(w));
+                out += w;
+            }
+        } else {
+            // Unknown verb — emit as-is
+            if (out + 2 < buf_cap) { buf[out++] = '%'; buf[out++] = verb; }
+        }
+    }
+    buf[out] = '\0';
+    return out;
+}
+
+// golangc_sprintf: returns string via sret (16-byte {ptr, len} buffer).
+void golangc_sprintf(char* sret_out, const char* fmt_ptr, int64_t fmt_len, ...) {
+    char buf[4096];
+    va_list ap;
+    va_start(ap, fmt_len);
+    int len = fmt_custom(buf, sizeof(buf), fmt_ptr, fmt_len, ap);
+    va_end(ap);
+    char* s = static_cast<char*>(malloc(static_cast<size_t>(len) + 1));
+    if (s) memcpy(s, buf, static_cast<size_t>(len) + 1);
+    *reinterpret_cast<char**>(sret_out) = s;
+    *reinterpret_cast<int64_t*>(sret_out + 8) = static_cast<int64_t>(len);
+}
+
+// golangc_printf: format to stdout.
+void golangc_printf(const char* fmt_ptr, int64_t fmt_len, ...) {
+    char buf[4096];
+    va_list ap;
+    va_start(ap, fmt_len);
+    int len = fmt_custom(buf, sizeof(buf), fmt_ptr, fmt_len, ap);
+    va_end(ap);
+    fwrite(buf, 1, static_cast<size_t>(len), stdout);
+}
+
+// ============================================================================
+// Rune / character conversion
+// ============================================================================
+
+// golangc_rune_to_string: Unicode code point → UTF-8 string via sret.
+void golangc_rune_to_string(char* sret_out, int32_t rune_val) {
+    char buf[5] = {0};
+    int len = 0;
+    uint32_t r = static_cast<uint32_t>(rune_val);
+    if (r < 0x80) {
+        buf[0] = static_cast<char>(r); len = 1;
+    } else if (r < 0x800) {
+        buf[0] = static_cast<char>(0xC0 | (r >> 6));
+        buf[1] = static_cast<char>(0x80 | (r & 0x3F)); len = 2;
+    } else if (r < 0x10000) {
+        buf[0] = static_cast<char>(0xE0 | (r >> 12));
+        buf[1] = static_cast<char>(0x80 | ((r >> 6) & 0x3F));
+        buf[2] = static_cast<char>(0x80 | (r & 0x3F)); len = 3;
+    } else {
+        buf[0] = static_cast<char>(0xF0 | (r >> 18));
+        buf[1] = static_cast<char>(0x80 | ((r >> 18) & 0x3F));
+        buf[2] = static_cast<char>(0x80 | ((r >> 6)  & 0x3F));
+        buf[3] = static_cast<char>(0x80 | (r & 0x3F)); len = 4;
+    }
+    char* s = static_cast<char*>(malloc(static_cast<size_t>(len) + 1));
+    if (s) {
+        memcpy(s, buf, static_cast<size_t>(len) + 1);
+    }
+    *reinterpret_cast<char**>(sret_out) = s;
+    *reinterpret_cast<int64_t*>(sret_out + 8) = static_cast<int64_t>(len);
+}
+
+// ============================================================================
+// os.Args
+// ============================================================================
+
+// GoRuntimeSlice: matches the {ptr, int64 len, int64 cap} slice header layout.
+struct GoRuntimeSlice {
+    void*   ptr;
+    int64_t len;
+    int64_t cap;
+};
+
+// GoRuntimeString: matches the {const char* ptr, int64 len} string layout.
+struct GoRuntimeString {
+    const char* ptr;
+    int64_t     len;
+};
+
+static GoRuntimeSlice g_os_args_slice = {nullptr, 0, 0};
+GoRuntimeSlice* golangc_os_args = &g_os_args_slice;
+
+void golangc_init_args(int argc, char** argv) {
+    if (argc <= 0) return;
+    auto* strings = static_cast<GoRuntimeString*>(
+        malloc(static_cast<size_t>(argc) * sizeof(GoRuntimeString)));
+    for (int i = 0; i < argc; ++i) {
+        strings[i].ptr = argv[i];
+        strings[i].len = static_cast<int64_t>(strlen(argv[i]));
+    }
+    g_os_args_slice.ptr = strings;
+    g_os_args_slice.len = static_cast<int64_t>(argc);
+    g_os_args_slice.cap = static_cast<int64_t>(argc);
+}
+
+// golangc_os_args_get: return os.Args slice by value via sret (24 bytes: ptr,len,cap).
+void golangc_os_args_get(char* sret_out) {
+    memcpy(sret_out, &g_os_args_slice, sizeof(GoRuntimeSlice));
 }
 
 } // extern "C"

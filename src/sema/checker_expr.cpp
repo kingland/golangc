@@ -1,5 +1,6 @@
 #include "sema/checker.hpp"
 
+#include <cstring>
 #include <fmt/format.h>
 
 namespace golangc {
@@ -314,11 +315,94 @@ ExprInfo Checker::check_paren(ast::ParenExpr& expr) {
 }
 
 // ============================================================================
+// Pseudo-package selector (fmt.X, strconv.X, os.X)
+// ============================================================================
+
+ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
+                                              ast::SelectorExpr& expr) {
+    ExprInfo info;
+    std::string_view pkg = pkg_sym.pkg_name;
+    std::string_view sel = expr.sel ? expr.sel->name : "";
+
+    // Helper: create an arena-allocated builtin symbol for this member.
+    auto make_member_builtin = [&](BuiltinId id) -> Symbol* {
+        auto* sym = arena_.create<Symbol>();
+        sym->kind = SymbolKind::Builtin;
+        sym->builtin_id = static_cast<int>(id);
+        sym->used = true;
+        // Build a stable string_view by storing the name in the arena.
+        std::string full = std::string(pkg) + "." + std::string(sel);
+        auto* stored = arena_.allocate_array<char>(full.size() + 1);
+        std::memcpy(stored, full.data(), full.size() + 1);
+        sym->name = std::string_view(stored, full.size());
+        return sym;
+    };
+
+    if (pkg == "fmt") {
+        if (sel == "Println") {
+            info.symbol = make_member_builtin(BuiltinId::FmtPrintln);
+            info.type = nullptr; // void return
+            return info;
+        }
+        if (sel == "Printf") {
+            info.symbol = make_member_builtin(BuiltinId::FmtPrintf);
+            info.type = nullptr;
+            return info;
+        }
+        if (sel == "Sprintf") {
+            info.symbol = make_member_builtin(BuiltinId::FmtSprintf);
+            info.type = basic_type(BasicKind::String);
+            return info;
+        }
+    }
+
+    if (pkg == "strconv") {
+        if (sel == "Itoa") {
+            info.symbol = make_member_builtin(BuiltinId::StrconvItoa);
+            info.type = basic_type(BasicKind::String);
+            return info;
+        }
+        if (sel == "Atoi") {
+            info.symbol = make_member_builtin(BuiltinId::StrconvAtoi);
+            // Returns (int, error) — represented as a Tuple type.
+            info.type = make_tuple_type({basic_type(BasicKind::Int), error_type()});
+            return info;
+        }
+    }
+
+    if (pkg == "os") {
+        if (sel == "Args") {
+            info.symbol = make_member_builtin(BuiltinId::OsArgs);
+            // os.Args is []string
+            info.type = make_slice_type(basic_type(BasicKind::String));
+            return info;
+        }
+    }
+
+    diag_.error(expr.loc, "undefined: {}.{}", pkg, sel);
+    return info;
+}
+
+// ============================================================================
 // Selector expression (x.y)
 // ============================================================================
 
 ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
     ExprInfo info;
+
+    // ---- Pseudo-package qualified access ----
+    if (expr.x && expr.x->kind == ast::ExprKind::Ident) {
+        auto* pkg_sym = lookup(expr.x->ident.name);
+        if (pkg_sym && pkg_sym->kind == SymbolKind::PseudoPkg) {
+            pkg_sym->used = true;
+            // Record the package identifier itself so it is not flagged as undefined.
+            ExprInfo pkg_info;
+            pkg_info.symbol = pkg_sym;
+            record_expr(expr.x, pkg_info);
+            info = check_pseudo_pkg_selector(*pkg_sym, expr);
+            return info;
+        }
+    }
 
     auto x_info = check_expr(expr.x);
     if (!x_info.type) return info;
@@ -460,6 +544,19 @@ ExprInfo Checker::check_call(ast::CallExpr& expr) {
     }
 
     auto func_info = check_expr(expr.func);
+
+    // Check if this is a pseudo-package builtin call (e.g. fmt.Println, strconv.Itoa).
+    // The check_selector path records a Builtin symbol on the ExprInfo for these.
+    if (func_info.symbol && func_info.symbol->kind == SymbolKind::Builtin) {
+        // Type-check args permissively — pseudo-package functions accept any types.
+        for (auto* arg : expr.args.span()) {
+            (void)check_expr(arg);
+        }
+        info.type = func_info.type; // Return type already set by check_pseudo_pkg_selector
+        info.symbol = func_info.symbol;
+        return info;
+    }
+
     if (!func_info.type) return info;
 
     Type* func_type = func_info.type;

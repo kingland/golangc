@@ -21,6 +21,13 @@ enum class BuiltinId : int {
     Close,
     Panic,
     Recover,
+    // Pseudo-package builtins (fmt, strconv, os)
+    FmtPrintln,    // fmt.Println(args...) — void, any types
+    FmtPrintf,     // fmt.Printf(format string, args...) — void
+    FmtSprintf,    // fmt.Sprintf(format string, args...) string
+    StrconvItoa,   // strconv.Itoa(n int) string
+    StrconvAtoi,   // strconv.Atoi(s string) (int, error)
+    OsArgs,        // os.Args []string (global load)
     // Sentinel
     Count
 };

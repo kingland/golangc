@@ -123,6 +123,43 @@ void golangc_chan_recv(golangc_chan* ch, void* out_ptr);
 /// Spawn a goroutine: func_ptr called with arg_count variadic int64_t args.
 void golangc_go_spawn(void* func_ptr, int64_t arg_count, ...);
 
+// ---- String conversion (strconv) ----
+
+/// Convert int64 to string. Returns {ptr, len} via sret (16-byte buffer).
+void golangc_itoa(char* sret_out, int64_t value);
+
+/// Convert string (ptr + len) to int64. Returns the integer value.
+/// Sets *out_ok to 1 on success, 0 on failure (out_ok may be nullptr).
+int64_t golangc_atoi(const char* ptr, int64_t len, int64_t* out_ok);
+
+// ---- String formatting (fmt) ----
+
+/// Simple sprintf: format string (ptr + len) + variadic int64/string args.
+/// Supports %d (int64), %s (string = ptr+len pair), %v (same as %d/int).
+/// Returns {ptr, len} via sret (16-byte buffer).
+void golangc_sprintf(char* sret_out, const char* fmt_ptr, int64_t fmt_len, ...);
+
+/// Simple printf to stdout — same format conventions as golangc_sprintf.
+void golangc_printf(const char* fmt_ptr, int64_t fmt_len, ...);
+
+// ---- Rune / character conversion ----
+
+/// Convert a Unicode code point (rune) to a UTF-8 string.
+/// Returns {ptr, len} via sret (16-byte buffer).
+void golangc_rune_to_string(char* sret_out, int32_t rune_val);
+
+// ---- os.Args ----
+
+/// Pointer to the runtime []string slice for command-line arguments.
+/// Populated by golangc_init_args() before main() is called.
+extern struct GoRuntimeSlice* golangc_os_args;
+
+/// Initialize os.Args from argc/argv.  Call this at program startup.
+void golangc_init_args(int argc, char** argv);
+
+/// Return the os.Args slice by value via sret (24-byte {ptr, len, cap} buffer).
+void golangc_os_args_get(char* sret_out);
+
 } // extern "C"
 
 /// Global closure env pointer — set by ClosureMake, read at indirect call sites.
