@@ -136,7 +136,8 @@ void X64CodeGenerator::emit_instruction(const ir::Instruction& inst,
         case ir::Opcode::StringLen:    emit_string_len(inst); break;
         case ir::Opcode::StringIndex:  emit_string_index(inst); break;
         case ir::Opcode::StringConcat: emit_string_concat(inst); break;
-        case ir::Opcode::StringEq:     emit_string_eq(inst); break;
+        case ir::Opcode::StringEq:         emit_string_eq(inst); break;
+        case ir::Opcode::StringDecodeRune: emit_string_decode_rune(inst); break;
 
         // Slice operations
         case ir::Opcode::SliceLen:   emit_slice_len(inst); break;
@@ -1195,6 +1196,52 @@ void X64CodeGenerator::emit_string_eq(const ir::Instruction& inst) {
     emit("call golangc_string_eq");
     emit(fmt::format("add rsp, {}", kShadowSpace));
     emit(fmt::format("mov QWORD PTR [rbp{}], rax", result_slot));
+}
+
+void X64CodeGenerator::emit_string_decode_rune(const ir::Instruction& inst) {
+    auto slot = get_temp_slot(inst.id);
+    auto* str = inst.operands[0];
+    auto* idx_val = inst.operands[1];
+    const ir::Value* rune_alloca = inst.operands.size() > 2 ? inst.operands[2] : nullptr;
+
+    // RCX = string ptr (first qword of the {ptr,len} struct)
+    if (temp_slots_.count(str->id)) {
+        emit(fmt::format("mov rcx, QWORD PTR [rbp{}]", temp_slots_[str->id]));
+    } else if (frame_.has_slot(str->id)) {
+        emit(fmt::format("mov rcx, QWORD PTR [rbp{}]", frame_.offset_of(str->id)));
+    }
+
+    // RDX = string len (second qword, at str_slot + 8)
+    {
+        uint32_t len_id = str->id + 100000;
+        auto len_it = temp_slots_.find(len_id);
+        if (len_it != temp_slots_.end()) {
+            emit(fmt::format("mov rdx, QWORD PTR [rbp{}]", len_it->second));
+        } else if (frame_.has_slot(len_id)) {
+            emit(fmt::format("mov rdx, QWORD PTR [rbp{}]", frame_.offset_of(len_id)));
+        } else if (temp_slots_.count(str->id)) {
+            emit(fmt::format("mov rdx, QWORD PTR [rbp{}]", temp_slots_[str->id] + 8));
+        } else if (frame_.has_slot(str->id)) {
+            emit(fmt::format("mov rdx, QWORD PTR [rbp{}]", frame_.offset_of(str->id) + 8));
+        }
+    }
+
+    // R8 = idx
+    load_value_to_reg(idx_val, X64Reg::R8);
+
+    // R9 = &rune_slot (lea)
+    if (rune_alloca) {
+        int32_t rs = frame_.has_slot(rune_alloca->id) ? frame_.offset_of(rune_alloca->id)
+                                                      : get_temp_slot(rune_alloca->id);
+        emit(fmt::format("lea r9, [rbp{}]", rs));
+    } else {
+        emit("xor r9d, r9d");
+    }
+
+    emit(fmt::format("sub rsp, {}", kShadowSpace));
+    emit("call golangc_string_decode_rune");
+    emit(fmt::format("add rsp, {}", kShadowSpace));
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));  // width
 }
 
 // ============================================================================

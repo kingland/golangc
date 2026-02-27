@@ -507,6 +507,13 @@ Instruction* IRBuilder::create_string_eq(Value* lhs, Value* rhs, const std::stri
     return inst;
 }
 
+Instruction* IRBuilder::create_string_decode_rune(Value* str, Value* idx, Value* rune_alloca,
+                                                   const std::string& name) {
+    auto* inst = emit(Opcode::StringDecodeRune, type_map_.i64_type(), name);
+    inst->operands = {str, idx, rune_alloca};
+    return inst;
+}
+
 // ============================================================================
 // Map operations
 // ============================================================================

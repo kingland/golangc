@@ -166,6 +166,8 @@ Scope* init_universe(ArenaAllocator& arena) {
     (void)scope->insert(make_pseudo_pkg("fmt"));
     (void)scope->insert(make_pseudo_pkg("strconv"));
     (void)scope->insert(make_pseudo_pkg("os"));
+    (void)scope->insert(make_pseudo_pkg("strings"));
+    (void)scope->insert(make_pseudo_pkg("math"));
 
     // ---- error interface type ----
     // type error interface { Error() string }

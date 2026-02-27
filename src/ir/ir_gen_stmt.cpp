@@ -454,6 +454,12 @@ void IRGenerator::gen_range(ast::RangeStmt& stmt) {
     auto* zero = builder_.create_const_int(type_map_.i64_type(), 0);
     builder_.create_store(zero, idx_alloca);
 
+    // Pre-allocate for string rune decoding (used only in string range)
+    auto* rune_alloca = builder_.create_alloca(type_map_.i32_type(), "range.rune.addr");
+    auto* width_alloca = builder_.create_alloca(type_map_.i64_type(), "range.width.addr");
+    auto* one_width = builder_.create_const_int(type_map_.i64_type(), 1);
+    builder_.create_store(one_width, width_alloca); // default width=1
+
     // Get length
     Value* length = nullptr;
     if (base_type->kind == sema::TypeKind::Slice) {
@@ -477,6 +483,13 @@ void IRGenerator::gen_range(ast::RangeStmt& stmt) {
     // Body
     loop_stack_.push_back({done_bb, post_bb});
     builder_.set_insert_block(body_bb);
+
+    // For string ranges: decode rune at current index, store width for post-increment
+    if (sema::is_string(range_info->type)) {
+        auto* idx_cur = builder_.create_load(idx_alloca, type_map_.i64_type(), "range.idx.cur");
+        auto* width = builder_.create_string_decode_rune(range_val, idx_cur, rune_alloca, "range.width");
+        builder_.create_store(width, width_alloca);
+    }
 
     // Bind key variable
     if (stmt.key && stmt.key->kind == ast::ExprKind::Ident) {
@@ -512,8 +525,9 @@ void IRGenerator::gen_range(ast::RangeStmt& stmt) {
                     idx_val, type_map_.ptr_type(), "arr.elem.addr");
                 elem_val = builder_.create_load(elem_ptr, elem_type, "range.elem");
             } else if (sema::is_string(range_info->type)) {
-                elem_type = type_map_.i8_type();
-                elem_val = builder_.create_string_index(range_val, idx_val, "range.char");
+                // Decode UTF-8 rune: rune_alloca was already written by the preamble above
+                elem_type = type_map_.i32_type();
+                elem_val = builder_.create_load(rune_alloca, type_map_.i32_type(), "range.rune");
             }
 
             auto* val_alloca = builder_.create_alloca(elem_type,
@@ -534,8 +548,13 @@ void IRGenerator::gen_range(ast::RangeStmt& stmt) {
     // Post: increment index
     builder_.set_insert_block(post_bb);
     auto* idx2 = builder_.create_load(idx_alloca, type_map_.i64_type(), "range.idx");
-    auto* one = builder_.create_const_int(type_map_.i64_type(), 1);
-    auto* next = builder_.create_add(idx2, one, "range.next");
+    Value* increment = nullptr;
+    if (sema::is_string(range_info->type)) {
+        increment = builder_.create_load(width_alloca, type_map_.i64_type(), "range.width");
+    } else {
+        increment = builder_.create_const_int(type_map_.i64_type(), 1);
+    }
+    auto* next = builder_.create_add(idx2, increment, "range.next");
     builder_.create_store(next, idx_alloca);
     builder_.create_br(cond_bb);
 

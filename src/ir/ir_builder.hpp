@@ -136,6 +136,12 @@ public:
     Instruction* create_string_concat(Value* a, Value* b, const std::string& name = "");
     Instruction* create_string_eq(Value* lhs, Value* rhs, const std::string& name = "");
 
+    // StringDecodeRune(str, idx, rune_alloca) → i64 width
+    // Calls golangc_string_decode_rune(ptr, len, idx, &rune_slot)
+    // operands: [str, idx, rune_alloca]
+    Instruction* create_string_decode_rune(Value* str, Value* idx, Value* rune_alloca,
+                                            const std::string& name = "");
+
     // ---- Map operations ----
     Instruction* create_map_make(IRType* map_type, int64_t key_size = 8, int64_t val_size = 8,
                                  const std::string& name = "");

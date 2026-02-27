@@ -1129,6 +1129,142 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
         return builder_.create_call(fn, {}, type_map_.slice_type(), "os.Args");
     }
 
+    // ---- strings package ----
+    // Two-string-arg functions returning bool (i64)
+    if (builtin_name == "strings.Contains" || builtin_name == "strings.HasPrefix" ||
+        builtin_name == "strings.HasSuffix" || builtin_name == "strings.Index" ||
+        builtin_name == "strings.Count") {
+        if (call.args.count >= 2) {
+            auto* s   = gen_expr(call.args[0]);
+            auto* sub = gen_expr(call.args[1]);
+            if (s && sub) {
+                std::string fn_name;
+                if      (builtin_name == "strings.Contains")  fn_name = "golangc_strings_contains";
+                else if (builtin_name == "strings.HasPrefix")  fn_name = "golangc_strings_has_prefix";
+                else if (builtin_name == "strings.HasSuffix")  fn_name = "golangc_strings_has_suffix";
+                else if (builtin_name == "strings.Index")      fn_name = "golangc_strings_index";
+                else                                           fn_name = "golangc_strings_count";
+                IRType* ret = (builtin_name == "strings.Index" || builtin_name == "strings.Count")
+                              ? type_map_.i64_type() : type_map_.i64_type(); // bool as i64
+                auto* fn = get_or_declare_runtime(fn_name, ret);
+                return builder_.create_call(fn, {s, sub}, ret, std::string(builtin_name));
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0);
+    }
+
+    // One-string-arg functions returning string via sret
+    if (builtin_name == "strings.ToUpper" || builtin_name == "strings.ToLower" ||
+        builtin_name == "strings.TrimSpace") {
+        if (call.args.count >= 1) {
+            auto* s = gen_expr(call.args[0]);
+            if (s) {
+                std::string fn_name;
+                if      (builtin_name == "strings.ToUpper")   fn_name = "golangc_strings_to_upper";
+                else if (builtin_name == "strings.ToLower")   fn_name = "golangc_strings_to_lower";
+                else                                          fn_name = "golangc_strings_trim_space";
+                auto* fn = get_or_declare_runtime(fn_name, type_map_.string_type());
+                return builder_.create_call(fn, {s}, type_map_.string_type(), std::string(builtin_name));
+            }
+        }
+        return builder_.create_const_string("", std::string(builtin_name) + ".empty");
+    }
+
+    // strings.Repeat(s, count) → string
+    if (builtin_name == "strings.Repeat") {
+        if (call.args.count >= 2) {
+            auto* s     = gen_expr(call.args[0]);
+            auto* count = gen_expr(call.args[1]);
+            if (s && count) {
+                auto* fn = get_or_declare_runtime("golangc_strings_repeat", type_map_.string_type());
+                return builder_.create_call(fn, {s, count}, type_map_.string_type(), "strings.Repeat");
+            }
+        }
+        return builder_.create_const_string("", "repeat.empty");
+    }
+
+    // strings.Trim(s, cutset) → string
+    if (builtin_name == "strings.Trim") {
+        if (call.args.count >= 2) {
+            auto* s   = gen_expr(call.args[0]);
+            auto* cut = gen_expr(call.args[1]);
+            if (s && cut) {
+                auto* fn = get_or_declare_runtime("golangc_strings_trim", type_map_.string_type());
+                return builder_.create_call(fn, {s, cut}, type_map_.string_type(), "strings.Trim");
+            }
+        }
+        return builder_.create_const_string("", "trim.empty");
+    }
+
+    // strings.Replace(s, old, new, n) → string
+    if (builtin_name == "strings.Replace") {
+        if (call.args.count >= 4) {
+            auto* s   = gen_expr(call.args[0]);
+            auto* old = gen_expr(call.args[1]);
+            auto* nw  = gen_expr(call.args[2]);
+            auto* n   = gen_expr(call.args[3]);
+            if (s && old && nw && n) {
+                auto* fn = get_or_declare_runtime("golangc_strings_replace", type_map_.string_type());
+                return builder_.create_call(fn, {s, old, nw, n}, type_map_.string_type(), "strings.Replace");
+            }
+        }
+        return builder_.create_const_string("", "replace.empty");
+    }
+
+    // strings.Split / strings.Join — limited: return/take []string but we have no slice-of-string runtime yet
+    // Emit a no-op placeholder that at least compiles
+    if (builtin_name == "strings.Split") {
+        // Just return an empty slice for now (compilation support)
+        auto* fn = get_or_declare_runtime("golangc_strings_split_nop", type_map_.slice_type());
+        (void)fn;
+        return builder_.create_const_nil(type_map_.slice_type(), "split.nop");
+    }
+    if (builtin_name == "strings.Join") {
+        return builder_.create_const_string("", "join.nop");
+    }
+
+    // ---- math package ----
+    // Single float64 argument → float64
+    if (builtin_name == "math.Abs"   || builtin_name == "math.Sqrt"  ||
+        builtin_name == "math.Floor" || builtin_name == "math.Ceil"  ||
+        builtin_name == "math.Round" || builtin_name == "math.Log"   ||
+        builtin_name == "math.Log2"  || builtin_name == "math.Log10") {
+        if (call.args.count >= 1) {
+            auto* x = gen_expr(call.args[0]);
+            if (x) {
+                std::string fn_name;
+                if      (builtin_name == "math.Abs")   fn_name = "golangc_math_abs";
+                else if (builtin_name == "math.Sqrt")  fn_name = "golangc_math_sqrt";
+                else if (builtin_name == "math.Floor") fn_name = "golangc_math_floor";
+                else if (builtin_name == "math.Ceil")  fn_name = "golangc_math_ceil";
+                else if (builtin_name == "math.Round") fn_name = "golangc_math_round";
+                else if (builtin_name == "math.Log")   fn_name = "golangc_math_log";
+                else if (builtin_name == "math.Log2")  fn_name = "golangc_math_log2";
+                else                                   fn_name = "golangc_math_log10";
+                auto* fn = get_or_declare_runtime(fn_name, type_map_.f64_type());
+                return builder_.create_call(fn, {x}, type_map_.f64_type(), std::string(builtin_name));
+            }
+        }
+        return builder_.create_const_float(type_map_.f64_type(), 0.0, "math.zero");
+    }
+
+    // Two float64 arguments → float64
+    if (builtin_name == "math.Max" || builtin_name == "math.Min" || builtin_name == "math.Pow") {
+        if (call.args.count >= 2) {
+            auto* x = gen_expr(call.args[0]);
+            auto* y = gen_expr(call.args[1]);
+            if (x && y) {
+                std::string fn_name;
+                if      (builtin_name == "math.Max") fn_name = "golangc_math_max";
+                else if (builtin_name == "math.Min") fn_name = "golangc_math_min";
+                else                                 fn_name = "golangc_math_pow";
+                auto* fn = get_or_declare_runtime(fn_name, type_map_.f64_type());
+                return builder_.create_call(fn, {x, y}, type_map_.f64_type(), std::string(builtin_name));
+            }
+        }
+        return builder_.create_const_float(type_map_.f64_type(), 0.0, "math.zero");
+    }
+
     if (builtin_name == "println" || builtin_name == "print") {
         std::vector<Value*> args;
         for (auto* arg_expr : call.args) {

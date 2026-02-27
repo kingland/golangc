@@ -123,6 +123,14 @@ void golangc_chan_recv(golangc_chan* ch, void* out_ptr);
 /// Spawn a goroutine: func_ptr called with arg_count variadic int64_t args.
 void golangc_go_spawn(void* func_ptr, int64_t arg_count, ...);
 
+// ---- String / rune iteration ----
+
+/// Decode one UTF-8 rune starting at ptr[idx].
+/// Writes the rune value to *out_rune and returns the byte width (1–4).
+/// Returns 1 and writes U+FFFD on invalid sequences.
+int64_t golangc_string_decode_rune(const char* ptr, int64_t len,
+                                    int64_t idx, int32_t* out_rune);
+
 // ---- String conversion (strconv) ----
 
 /// Convert int64 to string. Returns {ptr, len} via sret (16-byte buffer).
@@ -159,6 +167,76 @@ void golangc_init_args(int argc, char** argv);
 
 /// Return the os.Args slice by value via sret (24-byte {ptr, len, cap} buffer).
 void golangc_os_args_get(char* sret_out);
+
+// ---- strings package ----
+
+/// strings.Contains: returns 1 if s contains substr, 0 otherwise.
+int64_t golangc_strings_contains(const char* s_ptr, int64_t s_len,
+                                   const char* sub_ptr, int64_t sub_len);
+
+/// strings.HasPrefix: returns 1 if s starts with prefix.
+int64_t golangc_strings_has_prefix(const char* s_ptr, int64_t s_len,
+                                    const char* pre_ptr, int64_t pre_len);
+
+/// strings.HasSuffix: returns 1 if s ends with suffix.
+int64_t golangc_strings_has_suffix(const char* s_ptr, int64_t s_len,
+                                    const char* suf_ptr, int64_t suf_len);
+
+/// strings.Index: returns byte index of first occurrence of substr in s, or -1.
+int64_t golangc_strings_index(const char* s_ptr, int64_t s_len,
+                               const char* sub_ptr, int64_t sub_len);
+
+/// strings.ToUpper: returns uppercased copy of s via sret.
+void golangc_strings_to_upper(char* sret_out, const char* s_ptr, int64_t s_len);
+
+/// strings.ToLower: returns lowercased copy of s via sret.
+void golangc_strings_to_lower(char* sret_out, const char* s_ptr, int64_t s_len);
+
+/// strings.TrimSpace: returns s with leading/trailing whitespace removed via sret.
+void golangc_strings_trim_space(char* sret_out, const char* s_ptr, int64_t s_len);
+
+/// strings.Repeat: returns s repeated count times via sret.
+void golangc_strings_repeat(char* sret_out, const char* s_ptr, int64_t s_len, int64_t count);
+
+/// strings.Count: returns number of non-overlapping occurrences of substr in s.
+int64_t golangc_strings_count(const char* s_ptr, int64_t s_len,
+                               const char* sub_ptr, int64_t sub_len);
+
+/// strings.Trim: returns s with all leading/trailing chars in cutset removed via sret.
+void golangc_strings_trim(char* sret_out, const char* s_ptr, int64_t s_len,
+                           const char* cut_ptr, int64_t cut_len);
+
+/// strings.Replace: returns copy of s with old replaced by new (n=-1 for all) via sret.
+void golangc_strings_replace(char* sret_out,
+                              const char* s_ptr, int64_t s_len,
+                              const char* old_ptr, int64_t old_len,
+                              const char* new_ptr, int64_t new_len,
+                              int64_t n);
+
+// ---- math package ----
+
+/// math.Abs
+double golangc_math_abs(double x);
+/// math.Sqrt
+double golangc_math_sqrt(double x);
+/// math.Floor
+double golangc_math_floor(double x);
+/// math.Ceil
+double golangc_math_ceil(double x);
+/// math.Round
+double golangc_math_round(double x);
+/// math.Max
+double golangc_math_max(double x, double y);
+/// math.Min
+double golangc_math_min(double x, double y);
+/// math.Pow
+double golangc_math_pow(double x, double y);
+/// math.Log
+double golangc_math_log(double x);
+/// math.Log2
+double golangc_math_log2(double x);
+/// math.Log10
+double golangc_math_log10(double x);
 
 } // extern "C"
 

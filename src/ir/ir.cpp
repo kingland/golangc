@@ -134,7 +134,8 @@ namespace ir {
         case Opcode::StringLen:      return "string_len";
         case Opcode::StringIndex:    return "string_index";
         case Opcode::StringConcat:   return "string_concat";
-        case Opcode::StringEq:       return "string_eq";
+        case Opcode::StringEq:           return "string_eq";
+        case Opcode::StringDecodeRune:   return "string_decode_rune";
         case Opcode::InterfaceMake:  return "iface_make";
         case Opcode::InterfaceData:  return "iface_data";
         case Opcode::InterfaceType:  return "iface_type";

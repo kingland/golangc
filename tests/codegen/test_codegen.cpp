@@ -3282,4 +3282,214 @@ func main() {
     EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
 }
 
+// ============================================================================
+// Phase 19: for-range-string, strings package, math package
+// ============================================================================
+
+TEST(Phase19Test, ForRangeStringCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    s := "hello"
+    for i, ch := range s {
+        _ = i
+        _ = ch
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase19Test, ForRangeStringEmitsDecodeRune) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    for _, ch := range "hello" {
+        _ = ch
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_string_decode_rune"));
+}
+
+TEST(Phase19Test, ForRangeStringKeyOnly) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    n := 0
+    for range "hello" {
+        n++
+    }
+    _ = n
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase19Test, StringsContainsCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    b := strings.Contains("hello world", "world")
+    _ = b
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_contains"));
+}
+
+TEST(Phase19Test, StringsHasPrefixHasSuffix) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    a := strings.HasPrefix("hello", "hel")
+    b := strings.HasSuffix("hello", "llo")
+    _ = a
+    _ = b
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_has_prefix"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_has_suffix"));
+}
+
+TEST(Phase19Test, StringsToUpperToLower) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    u := strings.ToUpper("hello")
+    l := strings.ToLower("HELLO")
+    _ = u
+    _ = l
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_to_upper"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_to_lower"));
+}
+
+TEST(Phase19Test, StringsTrimSpace) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    s := strings.TrimSpace("  hello  ")
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_trim_space"));
+}
+
+TEST(Phase19Test, StringsIndex) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    i := strings.Index("hello world", "world")
+    _ = i
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_index"));
+}
+
+TEST(Phase19Test, MathSqrtAbsCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func main() {
+    x := math.Sqrt(2.0)
+    y := math.Abs(-3.14)
+    _ = x
+    _ = y
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_sqrt"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_abs"));
+}
+
+TEST(Phase19Test, MathMaxMinPow) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func main() {
+    a := math.Max(1.0, 2.0)
+    b := math.Min(3.0, 4.0)
+    c := math.Pow(2.0, 10.0)
+    _ = a
+    _ = b
+    _ = c
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_max"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_min"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_pow"));
+}
+
+TEST(Phase19Test, MathFloorCeilRound) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func main() {
+    a := math.Floor(3.7)
+    b := math.Ceil(3.2)
+    c := math.Round(3.5)
+    _ = a
+    _ = b
+    _ = c
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_floor"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_ceil"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_round"));
+}
+
+TEST(Phase19Test, StringsReplaceRepeat) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    r := strings.Replace("hello world", "world", "Go", -1)
+    s := strings.Repeat("ab", 3)
+    _ = r
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_replace"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_repeat"));
+}
+
+TEST(Phase19Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "strings"
+    "math"
+)
+func main() {
+    s := "Hello, World!"
+    if strings.Contains(s, "World") {
+        fmt.Println(strings.ToUpper(s))
+    }
+    x := math.Sqrt(16.0)
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_contains"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_to_upper"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_sqrt"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
 

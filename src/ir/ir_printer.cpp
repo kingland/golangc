@@ -292,6 +292,13 @@ std::string IRPrinter::print_instruction(const Instruction& inst) {
                                   format_value(inst.operands[1]));
             break;
 
+        case Opcode::StringDecodeRune:
+            result += fmt::format("string_decode_rune {}, {}, {} : i64",
+                                  format_value(inst.operands[0]),
+                                  format_value(inst.operands[1]),
+                                  inst.operands.size() > 2 ? format_value(inst.operands[2]) : "null");
+            break;
+
         case Opcode::InterfaceMake:
             result += fmt::format("iface_make {}, {} : interface",
                                   format_value(inst.operands[0]),

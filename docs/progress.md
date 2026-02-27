@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 18 (Pseudo-packages: fmt, strconv, os) - Complete
-## Current Milestone: Phase 18 complete - fmt.Println/Printf/Sprintf, strconv.Itoa/Atoi, os.Args, string(int) rune-to-string conversion, 11 new PseudoPkgTest tests — strconv_demo.go sample added (192 codegen tests, 579 total)
-## Completion Estimate: 80%
+## Current Phase: 19 (for-range-string UTF-8, strings package, math package) - Complete
+## Current Milestone: Phase 19 complete - for-range-string emits golangc_string_decode_rune (proper UTF-8 rune iteration), strings pseudo-package (Contains/HasPrefix/HasSuffix/Index/ToUpper/ToLower/TrimSpace/Repeat/Replace/Count/Trim), math pseudo-package (Abs/Sqrt/Floor/Ceil/Round/Max/Min/Pow/Log/Log2/Log10), 13 new Phase19Test tests — strings_math_demo.go sample added (205 codegen tests, 592 total)
+## Completion Estimate: 83%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -14,8 +14,8 @@
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T in call args fixed |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction; spread type check fix; unused param false positive fix |
 | IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq, make_array_type public |
-| CodeGen | ✅ Complete | 192 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os pseudo-packages, rune-to-string |
-| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get |
+| CodeGen | ✅ Complete | 205 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings package, math package |
+| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get + golangc_string_decode_rune + strings package (contains/prefix/suffix/index/upper/lower/trim/repeat/replace/count) + math package (abs/sqrt/floor/ceil/round/max/min/pow/log) |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
@@ -884,5 +884,77 @@
 - `strconv.Atoi` returns a 2-field IR struct `{i64, interface}` matching the `(int, error)` Tuple expected by short-var-decl destructuring.
 
 #### Next Steps
-- **Phase 19**: `for range` over strings (UTF-8 rune iteration), string formatting improvements
+- **Phase 19**: `for range` over strings (UTF-8 rune iteration), `strings` package, `math` package ← **done below**
 - **Future**: Buffered channels, GC, self-hosting
+
+---
+
+### Session 19 — Phase 19: for-range-string (UTF-8), strings package, math package
+
+#### Completed
+
+- **`src/ir/ir.hpp`**: Added `StringDecodeRune` opcode.
+
+- **`src/ir/ir.cpp`**: Added `"string_decode_rune"` to `opcode_name()`.
+
+- **`src/ir/ir_builder.hpp` / `ir_builder.cpp`**: Added `create_string_decode_rune(str, idx, rune_alloca)` → `i64` (byte width). Operands: `[str, idx, rune_alloca]`. The rune_alloca is an i32 alloca whose address is passed to the runtime function.
+
+- **`src/ir/ir_printer.cpp`**: Added `StringDecodeRune` case.
+
+- **`src/codegen/x64_codegen.hpp`**: Added `emit_string_decode_rune` declaration.
+
+- **`src/codegen/x64_codegen_inst.cpp`**:
+  - Added dispatch case for `StringDecodeRune`.
+  - `emit_string_decode_rune`: loads string ptr into RCX, string len into RDX (using `id+100000` convention), idx into R8, LEAs the i32 rune alloca address into R9, calls `golangc_string_decode_rune`, stores RAX (byte width) to result slot.
+
+- **`src/ir/ir_gen_stmt.cpp`** — `gen_range()`:
+  - Pre-allocates `rune_alloca` (i32) and `width_alloca` (i64, init=1) before loop start.
+  - String-range body preamble: unconditionally calls `create_string_decode_rune(range_val, idx_cur, rune_alloca)` and stores width to `width_alloca`.
+  - String value-binding: changed from `create_string_index` (byte, i8) to `create_load(rune_alloca, i32)` (decoded rune).
+  - Post-increment: for string ranges uses `width_alloca` as increment instead of constant 1, enabling correct multi-byte UTF-8 rune iteration.
+
+- **`src/sema/universe.hpp`**: Added 24 new `BuiltinId` values: `StringsContains`, `StringsHasPrefix`, `StringsHasSuffix`, `StringsIndex`, `StringsToUpper`, `StringsToLower`, `StringsTrimSpace`, `StringsRepeat`, `StringsReplace`, `StringsCount`, `StringsTrim`, `StringsSplit`, `StringsJoin`, and `MathAbs`/`MathSqrt`/`MathFloor`/`MathCeil`/`MathRound`/`MathMax`/`MathMin`/`MathPow`/`MathLog`/`MathLog2`/`MathLog10`.
+
+- **`src/sema/universe.cpp`**: Registered `strings` and `math` as `PseudoPkg` in the universe scope.
+
+- **`src/sema/checker_expr.cpp`** — `check_pseudo_pkg_selector`:
+  - Added `strings` block: 13 members mapped to `Builtin` symbols with correct return types (`bool`, `int`, `string`, `[]string`).
+  - Added `math` block: 11 members all returning `float64`.
+
+- **`src/ir/ir_gen_expr.cpp`** — `gen_builtin_call`:
+  - `strings.Contains/HasPrefix/HasSuffix/Index/Count`: call `golangc_strings_{contains,has_prefix,has_suffix,index,count}(s, sub)` → `i64`.
+  - `strings.ToUpper/ToLower/TrimSpace`: call `golangc_strings_{to_upper,to_lower,trim_space}(s)` → `string` (sret).
+  - `strings.Repeat`: `golangc_strings_repeat(s, count)` → `string`.
+  - `strings.Trim`: `golangc_strings_trim(s, cutset)` → `string`.
+  - `strings.Replace`: `golangc_strings_replace(s, old, new, n)` → `string`.
+  - `strings.Split/Join`: placeholder no-ops (return empty slice / empty string) — full slice-of-string support deferred.
+  - `math.Abs/Sqrt/Floor/Ceil/Round/Log/Log2/Log10`: single-float64-arg → `f64`.
+  - `math.Max/Min/Pow`: two-float64-arg → `f64`.
+
+- **`src/runtime/runtime.hpp`**: Added declarations for all `golangc_strings_*` and `golangc_math_*` functions.
+
+- **`src/runtime/runtime.cpp`**:
+  - Added `#include <cctype>` and `#include <cmath>`.
+  - Implemented all `golangc_strings_*` functions using `memcmp`-based algorithms (no null-termination dependencies).
+  - Implemented all `golangc_math_*` functions as thin wrappers over `<cmath>` (`fabs`, `sqrt`, `floor`, `ceil`, `round`, `fmax`/fmin via ternary, `pow`, `log`, `log2`, `log10`).
+
+- **`samples/strings_math_demo.go`**: New sample demonstrating strings and math packages plus for-range-string rune counting.
+
+- **13 new codegen tests** (192→205): `ForRangeStringCompilesNoErrors`, `ForRangeStringEmitsDecodeRune`, `ForRangeStringKeyOnly`, `StringsContainsCompilesNoErrors`, `StringsHasPrefixHasSuffix`, `StringsToUpperToLower`, `StringsTrimSpace`, `StringsIndex`, `MathSqrtAbsCompilesNoErrors`, `MathMaxMinPow`, `MathFloorCeilRound`, `StringsReplaceRepeat`, `GoFull`.
+
+#### Current State
+- All 592 total tests pass (30+89+87+110+71+205)
+- `for i, ch := range s` iterates by Unicode rune (UTF-8 variable-width); `ch` is `int32` (rune)
+- `strings.Contains/HasPrefix/HasSuffix/Index/ToUpper/ToLower/TrimSpace/Repeat/Replace/Count/Trim` all compile and emit correct runtime calls
+- `math.Abs/Sqrt/Floor/Ceil/Round/Max/Min/Pow/Log/Log2/Log10` all compile and emit correct float64 runtime calls
+- `strings.Split/Join` compile (emit no-ops) — full implementation deferred
+
+#### Design Notes
+- `StringDecodeRune` follows the `MapIterNext` pattern: special opcode with alloca address passed via `lea` in codegen. This avoids complications with the `emit_call` large-struct / pointer detection logic.
+- `width_alloca` is pre-allocated before the loop entry so it survives across the post-increment basic block boundary. Initialized to 1 so non-string range paths are unaffected.
+- All `golangc_strings_*` functions use `memcmp`-based algorithms to respect Go's `{ptr,len}` string representation (no null-terminators assumed).
+- Math functions are direct `<cmath>` wrappers with no overhead.
+
+#### Next Steps
+- **Phase 20**: `strings.Builder`, `fmt.Fprintf` / `fmt.Errorf`, `errors.New`, buffered `make(chan T, n)`
+- **Future**: Full `strings.Split/Join` with `[]string`, GC, self-hosting

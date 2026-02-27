@@ -379,6 +379,41 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
         }
     }
 
+    if (pkg == "strings") {
+        auto* bool_type  = basic_type(BasicKind::Bool);
+        auto* int_type   = basic_type(BasicKind::Int);
+        auto* str_type   = basic_type(BasicKind::String);
+        auto* str_slice  = make_slice_type(str_type);
+        if (sel == "Contains")  { info.symbol = make_member_builtin(BuiltinId::StringsContains);  info.type = bool_type; return info; }
+        if (sel == "HasPrefix") { info.symbol = make_member_builtin(BuiltinId::StringsHasPrefix);  info.type = bool_type; return info; }
+        if (sel == "HasSuffix") { info.symbol = make_member_builtin(BuiltinId::StringsHasSuffix);  info.type = bool_type; return info; }
+        if (sel == "Index")     { info.symbol = make_member_builtin(BuiltinId::StringsIndex);      info.type = int_type;  return info; }
+        if (sel == "ToUpper")   { info.symbol = make_member_builtin(BuiltinId::StringsToUpper);   info.type = str_type;  return info; }
+        if (sel == "ToLower")   { info.symbol = make_member_builtin(BuiltinId::StringsToLower);   info.type = str_type;  return info; }
+        if (sel == "TrimSpace") { info.symbol = make_member_builtin(BuiltinId::StringsTrimSpace); info.type = str_type;  return info; }
+        if (sel == "Repeat")    { info.symbol = make_member_builtin(BuiltinId::StringsRepeat);    info.type = str_type;  return info; }
+        if (sel == "Replace")   { info.symbol = make_member_builtin(BuiltinId::StringsReplace);   info.type = str_type;  return info; }
+        if (sel == "Count")     { info.symbol = make_member_builtin(BuiltinId::StringsCount);     info.type = int_type;  return info; }
+        if (sel == "Trim")      { info.symbol = make_member_builtin(BuiltinId::StringsTrim);      info.type = str_type;  return info; }
+        if (sel == "Split")     { info.symbol = make_member_builtin(BuiltinId::StringsSplit);     info.type = str_slice; return info; }
+        if (sel == "Join")      { info.symbol = make_member_builtin(BuiltinId::StringsJoin);      info.type = str_type;  return info; }
+    }
+
+    if (pkg == "math") {
+        auto* f64_type = basic_type(BasicKind::Float64);
+        if (sel == "Abs")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Sqrt")  { info.symbol = make_member_builtin(BuiltinId::MathSqrt);  info.type = f64_type; return info; }
+        if (sel == "Floor") { info.symbol = make_member_builtin(BuiltinId::MathFloor); info.type = f64_type; return info; }
+        if (sel == "Ceil")  { info.symbol = make_member_builtin(BuiltinId::MathCeil);  info.type = f64_type; return info; }
+        if (sel == "Round") { info.symbol = make_member_builtin(BuiltinId::MathRound); info.type = f64_type; return info; }
+        if (sel == "Max")   { info.symbol = make_member_builtin(BuiltinId::MathMax);   info.type = f64_type; return info; }
+        if (sel == "Min")   { info.symbol = make_member_builtin(BuiltinId::MathMin);   info.type = f64_type; return info; }
+        if (sel == "Pow")   { info.symbol = make_member_builtin(BuiltinId::MathPow);   info.type = f64_type; return info; }
+        if (sel == "Log")   { info.symbol = make_member_builtin(BuiltinId::MathLog);   info.type = f64_type; return info; }
+        if (sel == "Log2")  { info.symbol = make_member_builtin(BuiltinId::MathLog2);  info.type = f64_type; return info; }
+        if (sel == "Log10") { info.symbol = make_member_builtin(BuiltinId::MathLog10); info.type = f64_type; return info; }
+    }
+
     diag_.error(expr.loc, "undefined: {}.{}", pkg, sel);
     return info;
 }

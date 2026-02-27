@@ -28,6 +28,32 @@ enum class BuiltinId : int {
     StrconvItoa,   // strconv.Itoa(n int) string
     StrconvAtoi,   // strconv.Atoi(s string) (int, error)
     OsArgs,        // os.Args []string (global load)
+    // strings pseudo-package
+    StringsContains,    // strings.Contains(s, substr string) bool
+    StringsHasPrefix,   // strings.HasPrefix(s, prefix string) bool
+    StringsHasSuffix,   // strings.HasSuffix(s, suffix string) bool
+    StringsIndex,       // strings.Index(s, substr string) int
+    StringsToUpper,     // strings.ToUpper(s string) string
+    StringsToLower,     // strings.ToLower(s string) string
+    StringsTrimSpace,   // strings.TrimSpace(s string) string
+    StringsRepeat,      // strings.Repeat(s string, count int) string
+    StringsReplace,     // strings.Replace(s, old, new string, n int) string
+    StringsCount,       // strings.Count(s, substr string) int
+    StringsTrim,        // strings.Trim(s, cutset string) string
+    StringsSplit,       // strings.Split(s, sep string) []string  (limited support)
+    StringsJoin,        // strings.Join(elems []string, sep string) string
+    // math pseudo-package
+    MathAbs,   // math.Abs(x float64) float64
+    MathSqrt,  // math.Sqrt(x float64) float64
+    MathFloor, // math.Floor(x float64) float64
+    MathCeil,  // math.Ceil(x float64) float64
+    MathRound, // math.Round(x float64) float64
+    MathMax,   // math.Max(x, y float64) float64
+    MathMin,   // math.Min(x, y float64) float64
+    MathPow,   // math.Pow(x, y float64) float64
+    MathLog,   // math.Log(x float64) float64
+    MathLog2,  // math.Log2(x float64) float64
+    MathLog10, // math.Log10(x float64) float64
     // Sentinel
     Count
 };
