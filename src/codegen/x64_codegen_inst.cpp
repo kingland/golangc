@@ -79,6 +79,7 @@ void X64CodeGenerator::emit_instruction(const ir::Instruction& inst,
 
         case ir::Opcode::InterfaceMake: emit_interface_make(inst); break;
         case ir::Opcode::InterfaceData: emit_interface_data(inst); break;
+        case ir::Opcode::InterfaceType: emit_interface_type(inst); break;
 
         // Aggregate operations
         case ir::Opcode::ExtractValue: emit_extract_value(inst); break;
@@ -937,6 +938,23 @@ void X64CodeGenerator::emit_interface_data(const ir::Instruction& inst) {
         emit(fmt::format("mov rax, QWORD PTR [rbp{}]", frame_.offset_of(iface->id + 100000)));
         emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
     }
+}
+
+void X64CodeGenerator::emit_interface_type(const ir::Instruction& inst) {
+    // InterfaceType(iface) -> type tag (first QWORD of the interface pair)
+    auto* iface = inst.operands[0];
+    auto slot = get_temp_slot(inst.id);
+
+    // The type tag is the FIRST QWORD — stored at the iface's own slot
+    auto tag_it = temp_slots_.find(iface->id);
+    if (tag_it != temp_slots_.end()) {
+        emit(fmt::format("mov rax, QWORD PTR [rbp{}]", tag_it->second));
+    } else if (frame_.has_slot(iface->id)) {
+        emit(fmt::format("mov rax, QWORD PTR [rbp{}]", frame_.offset_of(iface->id)));
+    } else {
+        emit("xor rax, rax");
+    }
+    emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
 }
 
 // ============================================================================

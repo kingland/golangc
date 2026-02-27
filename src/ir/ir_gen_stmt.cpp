@@ -39,6 +39,9 @@ void IRGenerator::gen_stmt(ast::Stmt* stmt) {
         case ast::StmtKind::Switch:
             gen_switch(stmt->switch_);
             break;
+        case ast::StmtKind::TypeSwitch:
+            gen_type_switch(stmt->type_switch);
+            break;
         case ast::StmtKind::Select:
             gen_select(stmt->select);
             break;
@@ -1001,6 +1004,131 @@ void IRGenerator::gen_local_var_spec(ast::VarSpec& spec) {
             }
         }
     }
+}
+
+// ============================================================================
+// Type ID helper
+// ============================================================================
+
+int64_t IRGenerator::type_id_for(const sema::Type* t) {
+    if (!t) return 0;
+    auto it = type_id_map_.find(t);
+    if (it != type_id_map_.end()) return it->second;
+    int64_t id = next_type_id_++;
+    type_id_map_[t] = id;
+    return id;
+}
+
+// ============================================================================
+// Type switch statement
+// ============================================================================
+
+void IRGenerator::gen_type_switch(ast::TypeSwitchStmt& stmt) {
+    // Evaluate the interface expression
+    Value* iface = nullptr;
+    std::string bound_name;
+
+    if (stmt.assign) {
+        if (stmt.assign->kind == ast::StmtKind::Expr && stmt.assign->expr.x &&
+            stmt.assign->expr.x->kind == ast::ExprKind::TypeAssert) {
+            iface = gen_expr(stmt.assign->expr.x->type_assert.x);
+        } else if (stmt.assign->kind == ast::StmtKind::ShortVarDecl) {
+            auto& svd = stmt.assign->short_var_decl;
+            if (svd.rhs.count > 0 && svd.rhs[0] &&
+                svd.rhs[0]->kind == ast::ExprKind::TypeAssert) {
+                iface = gen_expr(svd.rhs[0]->type_assert.x);
+            }
+            if (svd.lhs.count > 0 && svd.lhs[0] &&
+                svd.lhs[0]->kind == ast::ExprKind::Ident) {
+                bound_name = std::string(svd.lhs[0]->ident.name);
+            }
+        }
+    }
+    if (!iface) return;
+
+    // Extract the type tag from the interface (first QWORD)
+    auto* tag = builder_.create_interface_type(iface, "ts.tag");
+
+    auto* merge_bb = current_func_->create_block(fresh_block_name("ts.merge"));
+
+    // Collect case info
+    struct CaseInfo {
+        BasicBlock* block;
+        std::vector<const sema::Type*> types;
+        ast::List<ast::Stmt*>* body;
+        bool is_default;
+    };
+    std::vector<CaseInfo> cases;
+    BasicBlock* default_bb = merge_bb;
+
+    for (auto* cc : stmt.cases.span()) {
+        if (!cc) continue;
+        auto* case_bb = current_func_->create_block(fresh_block_name("ts$case"));
+        bool is_default = (cc->values.count == 0);
+        if (is_default) default_bb = case_bb;
+
+        std::vector<const sema::Type*> types;
+        for (auto* v : cc->values.span()) {
+            if (!v) continue;
+            auto* info = expr_info(v);
+            if (info && info->symbol &&
+                info->symbol->kind == sema::SymbolKind::Type) {
+                types.push_back(sema::underlying(info->symbol->type));
+            } else if (info && info->type) {
+                types.push_back(sema::underlying(info->type));
+            }
+        }
+        cases.push_back({case_bb, std::move(types), &cc->body, is_default});
+    }
+
+    // Emit comparison chain: for each non-default case, compare tag against type IDs
+    for (auto& ci : cases) {
+        if (ci.is_default) continue;
+        for (auto* t : ci.types) {
+            int64_t tid = type_id_for(t);
+            auto* expected = builder_.create_const_int(type_map_.i64_type(), tid, "ts.id");
+            auto* cmp = builder_.create_eq(tag, expected, "ts.cmp");
+            auto* next_bb = current_func_->create_block(fresh_block_name("ts.next"));
+            builder_.create_condbr(cmp, ci.block, next_bb);
+            builder_.set_insert_block(next_bb);
+        }
+    }
+    // Fall through to default (or merge if no default)
+    if (!builder_.insert_block()->has_terminator())
+        builder_.create_br(default_bb);
+
+    // Emit case bodies
+    loop_stack_.push_back({merge_bb, nullptr});
+    for (auto& ci : cases) {
+        builder_.set_insert_block(ci.block);
+
+        // Bind the variable (v := x.(type)) for single-type cases
+        if (!bound_name.empty() && bound_name != "_") {
+            IRType* data_type = type_map_.i64_type();
+            if (!ci.is_default && ci.types.size() == 1 && ci.types[0])
+                data_type = map_sema_type(const_cast<sema::Type*>(ci.types[0]));
+            // Extract data pointer from interface
+            auto* data = builder_.create_interface_data(iface, data_type, "ts.data");
+            // Look up the bound symbol in var_map_
+            // Since sema opens a new scope per case with the bound var,
+            // we can look it up by name in the current case's sema ExprInfo.
+            // Simplest approach: allocate a fresh alloca and map it for
+            // any symbol whose name matches bound_name.
+            for (auto& [sym, slot] : var_map_) {
+                if (sym && sym->name == bound_name) {
+                    builder_.create_store(data, slot);
+                    break;
+                }
+            }
+        }
+
+        for (auto* s : *ci.body) gen_stmt(s);
+        if (!builder_.insert_block()->has_terminator())
+            builder_.create_br(merge_bb);
+    }
+    loop_stack_.pop_back();
+
+    builder_.set_insert_block(merge_bb);
 }
 
 } // namespace ir

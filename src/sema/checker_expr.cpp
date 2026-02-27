@@ -90,7 +90,9 @@ ExprInfo Checker::check_expr(ast::Expr* expr) {
 
 ExprInfo Checker::check_ident(ast::IdentExpr& expr, SourceLocation loc) {
     if (expr.name == "_") {
-        return ExprInfo{nullptr, nullptr, true, nullptr};
+        ExprInfo blank;
+        blank.is_lvalue = true;
+        return blank;
     }
 
     auto* sym = lookup(expr.name);
@@ -360,6 +362,18 @@ ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
     }
     if (method) {
         info.type = method;
+        // Check if this is a pointer-receiver method called on a value type.
+        // In that case, IR gen must take &recv before the call.
+        Type* named_base = base;
+        if (named_base->kind == TypeKind::Named && named_base->named) {
+            for (const auto& m : named_base->named->methods) {
+                if (m.name == sel_name && m.pointer_receiver &&
+                    x_info.type->kind != TypeKind::Pointer) {
+                    info.needs_addr_for_recv = true;
+                    break;
+                }
+            }
+        }
         return info;
     }
 

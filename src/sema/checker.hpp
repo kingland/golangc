@@ -20,6 +20,7 @@ struct ExprInfo {
     Type* type = nullptr;
     ConstValue* const_val = nullptr;
     bool is_lvalue = false;
+    bool needs_addr_for_recv = false; // pointer-receiver method called on value: &recv needed
     Symbol* symbol = nullptr; // For identifier expressions
 };
 
@@ -64,6 +65,9 @@ private:
 
     // Type cache for composite types to avoid duplicates
     std::vector<Type*> type_cache_;
+
+    // Current iota value (reset per const group, incremented per spec)
+    int64_t current_iota_ = 0;
 
     // ---- Scope helpers ----
     Scope* open_scope(ScopeKind kind);
@@ -130,6 +134,7 @@ private:
     void check_expr_stmt(ast::ExprStmt& stmt);
     void check_decl_stmt(ast::DeclStmt& stmt);
     void check_unused_vars(Scope* scope);
+    void check_type_switch(ast::TypeSwitchStmt& stmt);
 
     // ---- Type construction helpers ----
     Type* make_basic_type(BasicKind kind);

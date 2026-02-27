@@ -214,6 +214,11 @@ bool Checker::assignable_to(Type* src, Type* dst) {
         // Check basic type compatibility
         const Type* du = underlying(dst);
         if (!du) return false;
+        // Untyped constants are always assignable to interface{} (empty interface).
+        // Any non-nil value satisfies interface{}, so this is valid in Go.
+        if (du->kind == TypeKind::Interface) {
+            return satisfies_interface(src, du->interface_);
+        }
         if (du->kind == TypeKind::Basic) {
             const auto& si = basic_info(src->basic);
             const auto& di = basic_info(du->basic);
@@ -302,23 +307,19 @@ Type* Checker::lookup_method(Type* t, std::string_view name) {
 
     // Check named type methods
     Type* base = t;
-    bool is_pointer = false;
     if (t->kind == TypeKind::Pointer) {
         base = t->pointer.base;
-        is_pointer = true;
     }
 
     if (base->kind == TypeKind::Named && base->named) {
         for (const auto& m : base->named->methods) {
             if (m.name == name) {
-                // Pointer receiver methods are available on *T
-                // Value receiver methods are available on both T and *T
-                if (!m.pointer_receiver || is_pointer) {
-                    return m.type;
-                }
+                // Return the method regardless of pointer_receiver.
+                // The caller (check_selector) will set needs_addr_for_recv if
+                // a pointer-receiver method is called on a non-pointer value.
+                return m.type;
             }
         }
-        // Also check if underlying is a struct — but methods are on the named type
     }
 
     return nullptr;
@@ -414,6 +415,10 @@ ConstValue* Checker::eval_const_expr(ast::Expr* expr) {
         }
 
         case ast::ExprKind::Ident: {
+            // iota is a predeclared identifier in const context
+            if (expr->ident.name == "iota") {
+                return arena_.create<ConstValue>(current_iota_);
+            }
             auto* sym = lookup(expr->ident.name);
             if (sym && sym->kind == SymbolKind::Const && sym->const_val) {
                 return sym->const_val;

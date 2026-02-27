@@ -72,7 +72,7 @@ void Checker::check_stmt(ast::Stmt* stmt) {
         case ast::StmtKind::Empty:
             break;
         case ast::StmtKind::TypeSwitch:
-            // TODO: type switch
+            check_type_switch(stmt->type_switch);
             break;
         case ast::StmtKind::CaseClause:
         case ast::StmtKind::CommClause:
@@ -614,6 +614,82 @@ void Checker::check_decl_stmt(ast::DeclStmt& stmt) {
         default:
             break;
     }
+}
+
+// ============================================================================
+// Type switch statement
+// ============================================================================
+
+void Checker::check_type_switch(ast::TypeSwitchStmt& stmt) {
+    auto* outer = open_scope(ScopeKind::Block);
+    (void)outer;
+    bool prev = in_loop_;
+    in_loop_ = true;
+
+    if (stmt.init) check_stmt(stmt.init);
+
+    // Determine the interface expression and optional bound variable name
+    ExprInfo iface_info;
+    std::string_view bound_name;
+
+    if (stmt.assign) {
+        if (stmt.assign->kind == ast::StmtKind::Expr && stmt.assign->expr.x) {
+            // switch x.(type) { ... }  — guard is just an expression stmt
+            auto* ta = stmt.assign->expr.x;
+            if (ta->kind == ast::ExprKind::TypeAssert) {
+                iface_info = check_expr(ta->type_assert.x);
+            }
+        } else if (stmt.assign->kind == ast::StmtKind::ShortVarDecl) {
+            // switch v := x.(type) { ... }
+            auto& svd = stmt.assign->short_var_decl;
+            if (svd.rhs.count > 0 && svd.rhs[0] &&
+                svd.rhs[0]->kind == ast::ExprKind::TypeAssert) {
+                iface_info = check_expr(svd.rhs[0]->type_assert.x);
+            }
+            if (svd.lhs.count > 0 && svd.lhs[0] &&
+                svd.lhs[0]->kind == ast::ExprKind::Ident) {
+                bound_name = svd.lhs[0]->ident.name;
+            }
+        }
+    }
+
+    for (auto* cc : stmt.cases.span()) {
+        if (!cc) continue;
+        auto* case_scope = open_scope(ScopeKind::Block);
+        (void)case_scope;
+
+        // For each value in case clause, check it as an expression (type name).
+        // Single concrete type — resolve it for bound variable typing.
+        Type* single_type = nullptr;
+        for (auto* v : cc->values.span()) {
+            if (!v) continue;
+            auto vi = check_expr(v);
+            if (cc->values.count == 1) {
+                // The symbol for a type name has kind == SymbolKind::Type
+                if (vi.symbol && vi.symbol->kind == SymbolKind::Type) {
+                    single_type = vi.symbol->type;
+                } else {
+                    single_type = vi.type;
+                }
+            }
+        }
+
+        // Declare bound variable for this case (if bound name present)
+        if (!bound_name.empty() && bound_name != "_") {
+            Type* var_type = (cc->values.count == 1 && single_type)
+                                 ? single_type
+                                 : iface_info.type;
+            if (!var_type) var_type = basic_type(BasicKind::Invalid);
+            auto* sym = declare(SymbolKind::Var, bound_name, var_type, cc->loc);
+            if (sym) sym->used = true;
+        }
+
+        for (auto* s : cc->body.span()) check_stmt(s);
+        close_scope();
+    }
+
+    in_loop_ = prev;
+    close_scope();
 }
 
 // ============================================================================

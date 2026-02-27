@@ -391,6 +391,9 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
     if (call.func->kind == ast::ExprKind::Selector) {
         auto& sel = call.func->selector;
         auto* base_info = expr_info(sel.x);
+        auto* func_sel_info = expr_info(call.func);
+        bool needs_addr = func_sel_info && func_sel_info->needs_addr_for_recv;
+
         if (base_info && base_info->type) {
             auto* base_type = sema::underlying(base_info->type);
             bool is_ptr = base_type->kind == sema::TypeKind::Pointer;
@@ -420,7 +423,20 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
 
                 if (!type_name.empty()) {
                     method_name = type_name + "." + std::string(sel.sel->name);
-                    receiver = gen_expr(sel.x);
+                    if (needs_addr) {
+                        // Pointer-receiver method on a value: pass &recv
+                        receiver = gen_addr(sel.x);
+                        if (!receiver) {
+                            // Not addressable (e.g. constant) — alloca+store
+                            auto* val = gen_expr(sel.x);
+                            if (val) {
+                                receiver = builder_.create_alloca(val->type, "recv.addr");
+                                builder_.create_store(val, receiver);
+                            }
+                        }
+                    } else {
+                        receiver = gen_expr(sel.x);
+                    }
                 }
             }
         }
@@ -478,7 +494,8 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
             if (param_type && param_type->kind == sema::TypeKind::Interface &&
                 arg_info && arg_info->type &&
                 sema::underlying(arg_info->type)->kind != sema::TypeKind::Interface) {
-                auto* type_tag = builder_.create_const_int(type_map_.i64_type(), 1, "type.tag");
+                int64_t tag_val = type_id_for(sema::underlying(arg_info->type));
+                auto* type_tag = builder_.create_const_int(type_map_.i64_type(), tag_val, "type.tag");
                 arg = builder_.create_interface_make(type_tag, arg, "iface");
             }
         }
@@ -516,7 +533,8 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
                     auto* arg_info = expr_info(call.args[i]);
                     if (arg_info && arg_info->type &&
                         sema::underlying(arg_info->type)->kind != sema::TypeKind::Interface) {
-                        auto* type_tag = builder_.create_const_int(type_map_.i64_type(), 1, "type.tag");
+                        int64_t tag_val = type_id_for(sema::underlying(arg_info->type));
+                        auto* type_tag = builder_.create_const_int(type_map_.i64_type(), tag_val, "type.tag");
                         elem = builder_.create_interface_make(type_tag, elem, "iface");
                     }
                 }

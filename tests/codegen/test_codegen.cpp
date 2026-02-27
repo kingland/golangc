@@ -2704,3 +2704,429 @@ func main() {
     EXPECT_TRUE(contains(result.asm_text, "max PROC"));
     EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
 }
+
+// ============================================================================
+// TypeSwitch tests (Phase 16)
+// ============================================================================
+
+TEST(TypeSwitchTest, TypeSwitchCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+func typeOf(i interface{}) string {
+    switch i.(type) {
+    case int:
+        return "int"
+    case string:
+        return "string"
+    default:
+        return "other"
+    }
+}
+func main() {
+    println(typeOf(42))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(TypeSwitchTest, TypeSwitchHasTsLabel) {
+    auto result = compile_to_asm(R"(
+package main
+func typeOf(i interface{}) string {
+    switch i.(type) {
+    case int:
+        return "int"
+    default:
+        return "other"
+    }
+}
+func main() {
+    println(typeOf(42))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "ts"));
+}
+
+TEST(TypeSwitchTest, TypeSwitchIntBranch) {
+    auto result = compile_to_asm(R"(
+package main
+func typeOf(i interface{}) string {
+    switch i.(type) {
+    case int:
+        return "int"
+    default:
+        return "other"
+    }
+}
+func main() {
+    println(typeOf(42))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "typeOf PROC"));
+}
+
+TEST(TypeSwitchTest, TypeSwitchStringBranch) {
+    auto result = compile_to_asm(R"(
+package main
+func typeOf(i interface{}) string {
+    switch i.(type) {
+    case int:
+        return "int"
+    case string:
+        return "string"
+    default:
+        return "other"
+    }
+}
+func main() {
+    println(typeOf("hello"))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "typeOf PROC"));
+}
+
+TEST(TypeSwitchTest, TypeSwitchBoolBranch) {
+    auto result = compile_to_asm(R"(
+package main
+func typeOf(i interface{}) string {
+    switch i.(type) {
+    case int:
+        return "int"
+    case bool:
+        return "bool"
+    default:
+        return "other"
+    }
+}
+func main() {
+    println(typeOf(true))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "typeOf PROC"));
+}
+
+TEST(TypeSwitchTest, TypeSwitchDefaultOnly) {
+    auto result = compile_to_asm(R"(
+package main
+func f(i interface{}) string {
+    switch i.(type) {
+    default:
+        return "other"
+    }
+}
+func main() {
+    println(f(42))
+}
+)");
+     EXPECT_FALSE(result.has_errors);
+}
+
+TEST(TypeSwitchTest, TypeSwitchNoDefault) {
+    auto result = compile_to_asm(R"(
+package main
+func f(i interface{}) {
+    switch i.(type) {
+    case int:
+        println("int")
+    case string:
+        println("string")
+    }
+}
+func main() {
+    f(42)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(TypeSwitchTest, TypeSwitchBoundVar) {
+    auto result = compile_to_asm(R"(
+package main
+func describe(i interface{}) string {
+    switch v := i.(type) {
+    case int:
+        _ = v
+        return "int"
+    case string:
+        _ = v
+        return "string"
+    default:
+        _ = v
+        return "other"
+    }
+}
+func main() {
+    println(describe(42))
+}
+)");
+     EXPECT_FALSE(result.has_errors);
+}
+
+TEST(TypeSwitchTest, TypeSwitchCompilesNoTodos) {
+    auto result = compile_to_asm(R"(
+package main
+func typeOf(i interface{}) string {
+    switch i.(type) {
+    case int:
+        return "int"
+    case string:
+        return "string"
+    case bool:
+        return "bool"
+    default:
+        return "other"
+    }
+}
+func main() {
+    println(typeOf(42))
+    println(typeOf("hello"))
+    println(typeOf(true))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+TEST(TypeSwitchTest, TypeSwitchGoFull) {
+    auto result = compile_to_asm(R"(
+package main
+func typeOf(i interface{}) string {
+    switch i.(type) {
+    case int:
+        return "int"
+    case string:
+        return "string"
+    case bool:
+        return "bool"
+    default:
+        return "other"
+    }
+}
+func main() {
+    println(typeOf(42))
+    println(typeOf("hello"))
+    println(typeOf(true))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "typeOf PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "main PROC"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+
+// ============================================================================
+// NamedType tests (Phase 17)
+// ============================================================================
+
+TEST(NamedTypeTest, PtrRecvCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+type Counter struct{ n int }
+func (c *Counter) Inc() { c.n++ }
+func (c *Counter) Value() int { return c.n }
+func main() {
+    c := Counter{}
+    c.Inc()
+    println(c.Value())
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(NamedTypeTest, PtrRecvEmitsMethod) {
+    auto result = compile_to_asm(R"(
+package main
+type Counter struct{ n int }
+func (c *Counter) Inc() { c.n++ }
+func main() {
+    c := Counter{}
+    c.Inc()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Counter$Inc PROC"));
+}
+
+TEST(NamedTypeTest, PtrRecvCallEmitted) {
+    auto result = compile_to_asm(R"(
+package main
+type Counter struct{ n int }
+func (c *Counter) Inc() { c.n++ }
+func main() {
+    c := Counter{}
+    c.Inc()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Counter$Inc"));
+}
+
+TEST(NamedTypeTest, IotaConstCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+type Direction int
+const (
+    North Direction = iota
+    East
+    South
+    West
+)
+func main() {
+    println(int(North))
+    println(int(East))
+}
+)");
+     EXPECT_FALSE(result.has_errors);
+}
+
+TEST(NamedTypeTest, IotaValues) {
+    auto result = compile_to_asm(R"(
+package main
+type Direction int
+const (
+    North Direction = iota
+    East
+    South
+    West
+)
+func main() {
+    println(int(North))
+    println(int(West))
+}
+)");
+     EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "main PROC"));
+}
+
+TEST(NamedTypeTest, IotaUntyped) {
+    auto result = compile_to_asm(R"(
+package main
+const (
+    A = iota
+    B
+    C
+)
+func main() {
+    println(A)
+    println(B)
+    println(C)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(NamedTypeTest, MethodOnConst) {
+    auto result = compile_to_asm(R"(
+package main
+type Direction int
+const (
+    North Direction = iota
+    East
+    South
+    West
+)
+func (d Direction) Name() string {
+    switch d {
+    case North:
+        return "North"
+    case East:
+        return "East"
+    case South:
+        return "South"
+    case West:
+        return "West"
+    }
+    return "Unknown"
+}
+func main() {
+    println(North.Name())
+    println(West.Name())
+}
+)");
+     EXPECT_FALSE(result.has_errors);
+}
+
+TEST(NamedTypeTest, MultiplePtrRecv) {
+    auto result = compile_to_asm(R"(
+package main
+type Counter struct{ n int }
+func (c *Counter) Inc() { c.n++ }
+func (c *Counter) Value() int { return c.n }
+func main() {
+    c := Counter{}
+    c.Inc()
+    c.Inc()
+    println(c.Value())
+}
+)");
+     EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Counter$Inc PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "Counter$Value PROC"));
+}
+
+TEST(NamedTypeTest, CompilesNoTodos) {
+    auto result = compile_to_asm(R"(
+package main
+type Counter struct{ n int }
+func (c *Counter) Inc() { c.n++ }
+func (c *Counter) Value() int { return c.n }
+func main() {
+    c := Counter{}
+    c.Inc()
+    c.Inc()
+    c.Inc()
+    println(c.Value())
+}
+)");
+     EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+TEST(NamedTypeTest, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+type Direction int
+const (
+    North Direction = iota
+    East
+    South
+    West
+)
+func (d Direction) Name() string {
+    switch d {
+    case North:
+        return "North"
+    case East:
+        return "East"
+    case South:
+        return "South"
+    case West:
+        return "West"
+    }
+    return "Unknown"
+}
+type Counter struct{ n int }
+func (c *Counter) Inc() { c.n++ }
+func (c *Counter) Value() int { return c.n }
+func main() {
+    println(North.Name())
+    println(West.Name())
+    c := Counter{}
+    c.Inc()
+    c.Inc()
+    println(c.Value())
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Direction$Name PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "Counter$Inc PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "Counter$Value PROC"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+

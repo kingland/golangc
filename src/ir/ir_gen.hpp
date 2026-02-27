@@ -33,6 +33,11 @@ private:
     std::unordered_map<const sema::Symbol*, Function*> func_map_;
     std::unordered_map<std::string, Function*> func_name_map_;
 
+    // Type ID map for type switch dispatch.
+    // ID 0 = nil/unknown, 2+ = concrete types assigned lazily.
+    std::unordered_map<const sema::Type*, int64_t> type_id_map_;
+    int64_t next_type_id_ = 2;
+
     // Loop context for break/continue
     struct LoopContext {
         BasicBlock* break_target = nullptr;
@@ -80,6 +85,10 @@ private:
     Value* gen_type_assert(ast::Expr* expr);
     Value* gen_func_lit(ast::Expr* expr);
 
+    // Returns (or lazily assigns) a stable integer type ID for type-switch dispatch.
+    // ID 0 = nil/unknown; 2+ = concrete types seen during this compilation unit.
+    int64_t type_id_for(const sema::Type* t);
+
     Value* gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func_info);
     Value* gen_logical_and(ast::Expr* expr);
     Value* gen_logical_or(ast::Expr* expr);
@@ -105,6 +114,7 @@ private:
     void gen_for(ast::ForStmt& stmt);
     void gen_range(ast::RangeStmt& stmt);
     void gen_switch(ast::SwitchStmt& stmt);
+    void gen_type_switch(ast::TypeSwitchStmt& stmt);
     void gen_select(ast::SelectStmt& stmt);
     void gen_inc_dec(ast::IncDecStmt& stmt);
     void gen_send(ast::SendStmt& stmt);

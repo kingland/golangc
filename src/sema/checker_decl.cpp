@@ -345,13 +345,19 @@ void Checker::check_var_spec(ast::VarSpec& spec) {
 // ============================================================================
 
 void Checker::check_const_decl(ast::ConstDecl& decl) {
-    for (auto* spec : decl.specs.span()) {
-        if (!spec) continue;
+    // iota starts at 0 for each const group and increments per spec line.
+    int64_t iota_val = 0;
+    // Track the last explicit type for implicit repetition (e.g. iota blocks).
+    Type* last_type = nullptr;
 
-        Type* declared_type = nullptr;
-        if (spec->type) {
-            declared_type = resolve_type(spec->type);
-        }
+    for (auto* spec : decl.specs.span()) {
+        if (!spec) { ++iota_val; continue; }
+
+        // Set current_iota_ before evaluating this spec's expressions.
+        current_iota_ = iota_val;
+
+        // Use explicit type if present, else inherit from previous spec (Go spec rule).
+        Type* declared_type = spec->type ? resolve_type(spec->type) : last_type;
 
         for (uint32_t i = 0; i < spec->names.count; ++i) {
             auto* name = spec->names[i];
@@ -360,16 +366,30 @@ void Checker::check_const_decl(ast::ConstDecl& decl) {
             ConstValue* val = nullptr;
             Type* const_type = declared_type;
 
-            if (i < spec->values.count) {
+            if (i < spec->values.count && spec->values[i]) {
+                // Explicit value expression (may reference iota).
                 val = eval_const_expr(spec->values[i]);
                 if (!val) {
                     diag_.error(name->loc, "constant expression required");
                 }
-
-                if (!const_type && spec->values[i]) {
-                    auto info = check_expr(spec->values[i]);
-                    const_type = info.type;
+                if (!const_type) {
+                    // Special case: iota is not in scope for check_expr,
+                    // so avoid calling check_expr on it (it would fire
+                    // "undefined: iota"). Untyped iota is always UntypedInt.
+                    auto* vexpr = spec->values[i];
+                    bool is_iota_ref = (vexpr && vexpr->kind == ast::ExprKind::Ident
+                                        && vexpr->ident.name == "iota");
+                    if (is_iota_ref) {
+                        const_type = basic_type(BasicKind::UntypedInt);
+                    } else {
+                        auto info = check_expr(spec->values[i]);
+                        const_type = info.type;
+                    }
                 }
+            } else if (spec->values.count == 0) {
+                // No value list — implicit iota (e.g. second line in iota block).
+                val = arena_.create<ConstValue>(iota_val);
+                // const_type already inherited from last_type / declared_type.
             }
 
             if (!const_type) {
@@ -386,6 +406,13 @@ void Checker::check_const_decl(ast::ConstDecl& decl) {
                 if (new_sym) new_sym->const_val = val;
             }
         }
+
+        // Remember this spec's type for the next implicit spec.
+        if (spec->type) {
+            last_type = resolve_type(spec->type);
+        }
+
+        ++iota_val;
     }
 }
 

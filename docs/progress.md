@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 15 (Variadic Functions) - Complete
-## Current Milestone: Phase 15 complete - variadic `...T` params, call-site slice packing, spread (`args...`) pass-through, sema fixes (spread type check + unused param false positive), 9 new tests — variadic.go sample added (161 codegen tests, 548 total)
-## Completion Estimate: Phase 15 ~100%
+## Current Phase: 17 (Named Types, Pointer Receivers, Iota) - Complete
+## Current Milestone: Phase 17 complete - pointer-receiver methods on value types (auto-&recv at call site), iota const evaluation with implicit spec repetition, method calls on named-type constants (South.Name()), 10 new NamedTypeTest tests — namedtypes.go sample added (181 codegen tests, 568 total)
+## Completion Estimate: 75%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -14,7 +14,7 @@
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T in call args fixed |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction; spread type check fix; unused param false positive fix |
 | IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq, make_array_type public |
-| CodeGen | ✅ Complete | 161 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread) |
+| CodeGen | ✅ Complete | 181 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants |
 | Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
@@ -761,6 +761,72 @@
 - Variadic functions work end-to-end: pack, spread, fixed+variadic, zero-arg all correct
 
 #### Next Steps
-- **Phase 16**: Type switches (`switch x.(type)`) — needed for interface dispatch patterns
 - **Phase 17**: Named types / type aliases, method sets on named types
 - **Future**: `fmt` package import system, buffered channels, GC, self-hosting
+
+---
+
+### Session 16 — Phase 16: Type Switches
+
+#### Completed
+- **`src/parser/parser.cpp`**: `parse_switch_stmt` refactored to detect `x.(type)` and `v := x.(type)` type-switch guards (both bare and with init statement). Redirects to `TypeSwitchStmt` AST node. Also fixed a bug where `switch init; tag {` misparsed the tag as a composite literal (restored `allow_composite_lit_` only *after* parsing the tag).
+- **`src/sema/checker.hpp`**: Added `check_type_switch` declaration.
+- **`src/sema/checker_stmt.cpp`**: Replaced TODO stub with full `check_type_switch` implementation — checks interface expression, resolves per-case type names, declares bound variable (for `v := x.(type)` form) with the correct type in each case scope.
+- **`src/sema/checker.cpp`**: Fixed `assignable_to` to accept untyped constants (`42`, `"hello"`, `true`) as valid arguments to `interface{}` parameters (previously returned false, blocking all type-switch test programs).
+- **`src/ir/ir_gen.hpp`**: Added `type_id_map_`, `next_type_id_` (lazy int IDs starting at 2), `type_id_for`, `gen_type_switch` declarations.
+- **`src/ir/ir_gen_stmt.cpp`**: Added `TypeSwitchStmt` dispatch, `type_id_for` implementation, `gen_type_switch` implementation — extracts type tag via `InterfaceType`, emits comparison chain against per-type IDs, emits case bodies with bound-variable data extraction.
+- **`src/ir/ir_gen_expr.cpp`**: Fixed both interface-boxing sites to use `type_id_for(underlying_type)` instead of hardcoded `1`. Type IDs assigned at boxing time are now consistent with type-switch dispatch.
+- **`src/codegen/x64_codegen.hpp`**: Added `emit_interface_type` declaration.
+- **`src/codegen/x64_codegen_inst.cpp`**: Added `InterfaceType` opcode dispatch and `emit_interface_type` implementation — reads first QWORD of the interface pair (the type tag) into a result slot.
+- **`samples/typeswitch.go`**: New sample — `typeOf(interface{}) string` returning `"int"`, `"string"`, `"bool"`, `"other"`.
+- **10 new codegen tests** (161→171): `TypeSwitchCompilesNoErrors`, `TypeSwitchHasTsLabel`, `TypeSwitchIntBranch`, `TypeSwitchStringBranch`, `TypeSwitchBoolBranch`, `TypeSwitchDefaultOnly`, `TypeSwitchNoDefault`, `TypeSwitchBoundVar`, `TypeSwitchCompilesNoTodos`, `TypeSwitchGoFull`
+
+#### Current State
+- All 12 samples compile (hello, fibonacci, structs, interfaces, maps, wordfreq, goroutines, defer, closures, switch, select, variadic, typeswitch)
+- All 558 total tests pass (30+89+87+110+71+171)
+- Type switches work end-to-end: int/string/bool/default dispatch, bound variable, init form all correct
+
+#### Next Steps
+- **Phase 17**: Named types / type aliases, method sets on named types
+- **Future**: `fmt` package import system, buffered channels, GC, self-hosting
+
+---
+
+### Session 17 — Phase 17: Named Types, Pointer Receivers, Iota
+
+#### Completed
+
+- **`src/sema/checker.hpp`**:
+  - Added `needs_addr_for_recv = false` field to `ExprInfo` — signals to IR gen that a pointer-receiver method is being called on a value (so `&recv` must be taken at the call site).
+  - Added `current_iota_ = 0` member to `Checker` — tracks the current `iota` value per const group.
+
+- **`src/sema/checker.cpp`** — `lookup_method`:
+  - Removed the `if (!m.pointer_receiver || is_pointer)` guard that silently dropped pointer-receiver methods when the receiver was a value type. Now returns the method unconditionally; the `needs_addr_for_recv` flag carries the "needs address-of" signal instead.
+  - `eval_const_expr`: added `iota` identifier handling — when the identifier name is `"iota"`, returns `ConstValue(current_iota_)` immediately without scope lookup.
+
+- **`src/sema/checker_decl.cpp`** — `check_const_decl` rewrite:
+  - Implements Go's iota semantics: `current_iota_` is reset to 0 at the first spec, incremented after each spec.
+  - Implicit spec repetition: specs with no value list inherit `last_type` from the previous explicit type and get `val = ConstValue(iota_val)` directly.
+  - Guard against calling `check_expr` on the `iota` identifier (not in scope — would fire "undefined: iota"). Untyped iota assigned `UntypedInt` directly.
+
+- **`src/sema/checker_expr.cpp`** — `check_selector`:
+  - After finding a method, checks if it is a pointer-receiver method called on a non-pointer receiver; if so, sets `info.needs_addr_for_recv = true`.
+  - Fixed aggregate initializer for `ExprInfo` blank identifier case (MSVC `C2440`).
+
+- **`src/ir/ir_gen_expr.cpp`** — `gen_call`:
+  - When `func_sel_info->needs_addr_for_recv` is true, calls `gen_addr(sel.x)` instead of `gen_expr(sel.x)` for the receiver. Falls back to alloca+store if the receiver is not directly addressable.
+
+- **`samples/namedtypes.go`**: New sample — `Counter` struct with pointer-receiver `Inc`/`Value`, `Direction` iota enum with `Name()` value-receiver method.
+
+- **10 new codegen tests** (171→181): `PtrRecvCompilesNoErrors`, `PtrRecvEmitsMethod`, `PtrRecvCallEmitted`, `IotaConstCompilesNoErrors`, `IotaValues`, `IotaUntyped`, `MethodOnConst`, `MultiplePtrRecv`, `CompilesNoTodos`, `GoFull`.
+
+#### Current State
+- All samples compile (hello, fibonacci, structs, interfaces, maps, wordfreq, goroutines, defer, closures, switch, select, variadic, typeswitch, namedtypes)
+- All 568 total tests pass (30+89+87+110+71+181)
+- Pointer-receiver methods work on addressable value receivers (auto-`&recv`)
+- `iota` works in typed and untyped const groups, including implicit repetition
+- Method calls on named-type constants work (`South.Name()`, `North.Name()`)
+
+#### Next Steps
+- **Phase 18**: String formatting, `fmt.Println`, package imports
+- **Future**: Buffered channels, GC, self-hosting

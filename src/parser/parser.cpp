@@ -1,4 +1,4 @@
-#include "parser/parser.hpp"
+﻿#include "parser/parser.hpp"
 
 #include <fmt/format.h>
 
@@ -1768,36 +1768,125 @@ Stmt* Parser::parse_switch_stmt() {
     SourceLocation loc = current_.location;
     expect(TokenKind::KW_switch);
 
-    auto* s = make_stmt(StmtKind::Switch);
-    s->switch_.loc = loc;
-    s->switch_.init = nullptr;
-    s->switch_.tag = nullptr;
-
     // Disable composite literals in switch header
     bool saved = allow_composite_lit_;
     allow_composite_lit_ = false;
+
+    // Helper: detect if a stmt is a type switch guard (x.(type) or v := x.(type))
+    auto is_typeswitch_guard = [](Stmt* s) -> bool {
+        if (!s) return false;
+        if (s->kind == StmtKind::Expr && s->expr.x &&
+            s->expr.x->kind == ExprKind::TypeAssert &&
+            s->expr.x->type_assert.type == nullptr)
+            return true;
+        if (s->kind == StmtKind::ShortVarDecl) {
+            auto& svd = s->short_var_decl;
+            return svd.rhs.count > 0 && svd.rhs[0] &&
+                   svd.rhs[0]->kind == ExprKind::TypeAssert &&
+                   svd.rhs[0]->type_assert.type == nullptr;
+        }
+        return false;
+    };
+
+    // Helper: build and return a TypeSwitchStmt given init and assign stmts
+    auto build_type_switch = [&](Stmt* init_stmt, Stmt* assign_stmt) -> Stmt* {
+        auto* ts = make_stmt(StmtKind::TypeSwitch);
+        ts->type_switch.loc = loc;
+        ts->type_switch.init = init_stmt;
+        ts->type_switch.assign = assign_stmt;
+        ts->type_switch.lbrace = current_.location;
+        expect(TokenKind::LBrace);
+        std::vector<CaseClause*> type_cases;
+        while (!at(TokenKind::RBrace) && !at_end())
+            type_cases.push_back(parse_case_clause());
+        ts->type_switch.cases = make_list(arena_, type_cases);
+        ts->type_switch.rbrace = current_.location;
+        expect(TokenKind::RBrace);
+        return ts;
+    };
 
     // switch { ... } or switch tag { ... } or switch init; tag { ... }
     if (current_.kind != TokenKind::LBrace) {
         auto* first = parse_simple_stmt(/*no_semi=*/true);
 
         if (current_.kind == TokenKind::LBrace) {
-            // switch tag { ... }
-            if (first->kind == StmtKind::Expr) {
-                s->switch_.tag = first->expr.x;
+            // switch tag { ... }  or  switch x.(type) { ... }
+            allow_composite_lit_ = saved;
+            if (is_typeswitch_guard(first)) {
+                return build_type_switch(nullptr, first);
             }
+            auto* s = make_stmt(StmtKind::Switch);
+            s->switch_.loc = loc;
+            s->switch_.init = nullptr;
+            s->switch_.tag = nullptr;
+            if (first->kind == StmtKind::Expr)
+                s->switch_.tag = first->expr.x;
+            s->switch_.lbrace = current_.location;
+            expect(TokenKind::LBrace);
+            std::vector<CaseClause*> cases;
+            while (!at(TokenKind::RBrace) && !at_end())
+                cases.push_back(parse_case_clause());
+            s->switch_.cases = make_list(arena_, cases);
+            s->switch_.rbrace = current_.location;
+            expect(TokenKind::RBrace);
+            return s;
         } else if (match(TokenKind::Semicolon)) {
             // switch init; [tag] { ... }
-            s->switch_.init = first;
-            if (current_.kind != TokenKind::LBrace) {
-                s->switch_.tag = parse_expr();
+            // NOTE: do NOT restore allow_composite_lit_ here yet.
+            // The tag expression must be parsed with composite literals
+            // disabled so that  switch init; x {  does not misparse x{...}
+            // as a composite literal.
+            if (current_.kind == TokenKind::LBrace) {
+                // switch init; { ... }  (no tag)
+                allow_composite_lit_ = saved;
+                auto* s = make_stmt(StmtKind::Switch);
+                s->switch_.loc = loc;
+                s->switch_.init = first;
+                s->switch_.tag = nullptr;
+                s->switch_.lbrace = current_.location;
+                expect(TokenKind::LBrace);
+                std::vector<CaseClause*> cases;
+                while (!at(TokenKind::RBrace) && !at_end())
+                    cases.push_back(parse_case_clause());
+                s->switch_.cases = make_list(arena_, cases);
+                s->switch_.rbrace = current_.location;
+                expect(TokenKind::RBrace);
+                return s;
             }
+            // Parse the tag / type guard after the semicolon.
+            // Keep allow_composite_lit_ = false during tag parse so an
+            // identifier tag followed by '{' is not consumed as a composite
+            // literal.  Restore it only after tag_stmt is parsed.
+            auto* tag_stmt = parse_simple_stmt(/*no_semi=*/true);
+            allow_composite_lit_ = saved;
+            if (is_typeswitch_guard(tag_stmt)) {
+                return build_type_switch(first, tag_stmt);
+            }
+            auto* s = make_stmt(StmtKind::Switch);
+            s->switch_.loc = loc;
+            s->switch_.init = first;
+            s->switch_.tag = (tag_stmt->kind == StmtKind::Expr) ? tag_stmt->expr.x : nullptr;
+            s->switch_.lbrace = current_.location;
+            expect(TokenKind::LBrace);
+            std::vector<CaseClause*> cases;
+            while (!at(TokenKind::RBrace) && !at_end())
+                cases.push_back(parse_case_clause());
+            s->switch_.cases = make_list(arena_, cases);
+            s->switch_.rbrace = current_.location;
+            expect(TokenKind::RBrace);
+            return s;
         } else {
+            allow_composite_lit_ = saved;
             error_expected("'{' or ';'");
         }
     }
 
     allow_composite_lit_ = saved;
+
+    auto* s = make_stmt(StmtKind::Switch);
+    s->switch_.loc = loc;
+    s->switch_.init = nullptr;
+    s->switch_.tag = nullptr;
 
     s->switch_.lbrace = current_.location;
     expect(TokenKind::LBrace);

@@ -174,6 +174,7 @@ private:
     void emit_trunc(const ir::Instruction& inst);
     void emit_interface_make(const ir::Instruction& inst);
     void emit_interface_data(const ir::Instruction& inst);
+    void emit_interface_type(const ir::Instruction& inst);
 
     // Float operations
     void emit_const_float(const ir::Instruction& inst);
