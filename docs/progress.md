@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 20 (strings.Builder, errors.New/fmt.Errorf, buffered channels) - Complete
-## Current Milestone: Phase 20 complete - strings.Builder opaque type with WriteString/WriteByte/String/Reset/Len methods, errors.New returns error interface, fmt.Errorf formats error values, buffered channels make(chan T, n) with ring buffer — 12 new Phase20Test tests — builder_errors_demo.go sample added (217 codegen tests, 604 total)
-## Completion Estimate: 86%
+## Current Phase: 23 (os.Exit + Extended strconv + File I/O Basics) - Complete
+## Current Milestone: Phase 23 complete - os.Exit, os.Open/Create, (*os.File).Close/WriteString, strconv.ParseInt/ParseFloat/FormatInt/FormatFloat/ParseBool/FormatBool — 14 new Phase23Test tests — files_demo.go sample added (251 codegen tests, 638 total)
+## Completion Estimate: 92%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -14,11 +14,40 @@
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T in call args fixed |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction; spread type check fix; unused param false positive fix |
 | IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq, make_array_type public |
-| CodeGen | ✅ Complete | 217 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, buffered+unbuffered channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os/strings/math/errors pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings.Builder, errors.New, fmt.Errorf |
-| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel (unbuffered+buffered ring buffer) + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get + golangc_string_decode_rune + strings package + math package + golangc_builder_{make,write_string,write_byte,string,reset,len} + golangc_errors_new + golangc_fmt_errorf |
+| CodeGen | ✅ Complete | 251 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, buffered+unbuffered channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os/strings/math/errors/sync pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings.Builder, errors.New, fmt.Errorf, sync.Mutex, sync.WaitGroup, os.Stdout/Stderr/Stdin, fmt.Fprintf, fmt.Fprintln, os.Exit, os.Open/Create, os.File.Close/WriteString, strconv.ParseInt/ParseFloat/FormatInt/FormatFloat/ParseBool/FormatBool |
+| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel (unbuffered+buffered ring buffer) + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get + golangc_string_decode_rune + strings package + math package + golangc_builder_{make,write_string,write_byte,string,reset,len} + golangc_errors_new + golangc_fmt_errorf + golangc_mutex_{make,lock,unlock,try_lock} + golangc_waitgroup_{make,add,done,wait} + golangc_file struct + golangc_os_stdout/stderr/stdin + golangc_fprintf + golangc_os_exit + golangc_os_open/create/file_close/file_write_string + golangc_parse_float/format_float/parse_bool/format_bool (strconv_ext.cpp) |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
+
+### Session 23 - Phase 23: os.Exit + Extended strconv + File I/O Basics (2026-02-28)
+#### Completed
+- `os.Exit(code int)` — emits `golangc_os_exit` call + `ret` to terminate basic block
+- `os.Open(path string) (*os.File, error)` — heap-allocates `golangc_file*` via `fopen_s("rb")`
+- `os.Create(path string) (*os.File, error)` — heap-allocates `golangc_file*` via `fopen_s("wb")`
+- `(*os.File).Close() error` — `golangc_os_file_close`, sets `f->f = nullptr`
+- `(*os.File).WriteString(s string) (int, error)` — `golangc_os_file_write_string`, returns bytes written
+- `strconv.ParseInt` — reuses `golangc_atoi`, returns `(int64, error)` tuple
+- `strconv.FormatInt` — reuses `golangc_itoa`, returns `string`
+- `strconv.ParseFloat` — new `golangc_parse_float` via `strtod`, returns `(float64, error)` tuple
+- `strconv.FormatFloat` — new `golangc_format_float` via `snprintf("%g")`, returns `string`
+- `strconv.ParseBool` — new `golangc_parse_bool`, accepts Go's accepted bool strings
+- `strconv.FormatBool` — new `golangc_format_bool`, returns `"true"` or `"false"`
+- New runtime file: `src/runtime/strconv_ext.cpp`
+- Extended `src/runtime/os_file.cpp` with Exit/Open/Create/Close/WriteString (uses `fopen_s` for MSVC compat)
+- Added 14 `Phase23Test` tests (14/14 pass)
+- Added `samples/files_demo.go`
+- 251 codegen tests, 638 total — all passing
+#### Bug fixed during implementation
+- `os.File` named type had no stub methods registered in `universe.cpp`, so `lookup_method` returned null and the `check_selector` `if (method)` branch was never entered. Fixed by adding `Close` and `WriteString` stub entries to `file_named->methods` (same pattern as `sync.WaitGroup`).
+#### Current State
+- All 6 test suites pass (638 tests total)
+- `os.Exit`, `os.Open`, `os.Create`, `os.File` methods all functional
+- Extended `strconv` coverage: ParseInt/Float/Bool + FormatInt/Float/Bool
+#### Next Steps
+- Phase 24: `bufio.Scanner` / `bufio.NewReader` for line-by-line input
+- Phase 25: `io.Reader`/`io.Writer` interface implementations
+- Phase 26: More complete `fmt.Scan*` family
 
 ### Session 1 - Phase 1: Project Infrastructure
 #### Completed
@@ -1025,5 +1054,62 @@
 - `strings_builder_ptr_type()` is a singleton set during `init_universe()`. `TypeExprKind::Qualified` in `resolve_type` handles `strings.Builder` in type position (`var b strings.Builder`).
 
 #### Next Steps
-- **Phase 21**: `io.Writer` / `io.Reader` interfaces, `os.Stdout/Stderr/Stdin`, `fmt.Fprintf`
+- **Phase 22**: `io.Writer` / `io.Reader` interfaces, `os.Stdout/Stderr/Stdin`, `fmt.Fprintf`
 - **Future**: Full `strings.Split/Join`, GC, self-hosting
+
+### Session 21 - Phase 21: sync.Mutex + sync.WaitGroup
+#### Completed
+- `sync.Mutex` opaque type with `Lock()`, `Unlock()`, `TryLock()` methods
+  - Backed by Windows `CRITICAL_SECTION` in `src/runtime/sync.cpp`
+  - `golangc_mutex_{make,lock,unlock,try_lock}` runtime functions
+  - `var mu sync.Mutex` → zero-value init calls `golangc_mutex_make()`
+- `sync.WaitGroup` opaque type with `Add(delta int)`, `Done()`, `Wait()` methods
+  - Backed by `CRITICAL_SECTION` + manual-reset `HANDLE` event
+  - `golangc_waitgroup_{make,add,done,wait}` runtime functions
+  - `var wg sync.WaitGroup` → zero-value init calls `golangc_waitgroup_make()`
+- Both types follow the identical opaque-pointer pattern as `strings.Builder`
+- `sync` pseudo-package registered in universe scope
+- `TypeExprKind::Qualified` handles `sync.Mutex` and `sync.WaitGroup` in type position
+- `check_selector` exposes Builtin symbols for all 6 methods
+- `gen_local_var_spec` zero-value init generalized to all opaque pointer Named types
+- `src/runtime/sync.cpp` added to `golangc_runtime` in CMakeLists.txt
+- 10 new Phase21Test tests (MutexCompilesNoErrors, MutexEmitsRuntime, MutexTryLock, MutexZeroValueInit, WaitGroupCompilesNoErrors, WaitGroupEmitsRuntime, WaitGroupZeroValueInit, MutexProtectedCounter, WaitGroupWithGoroutines, GoFull)
+- `samples/sync_demo.go` — mutex-protected counter + WaitGroup goroutine sync demo
+
+#### Current State
+- All prior tests pass (604 baseline + 10 new = 614 total)
+- sync.Mutex and sync.WaitGroup usable as value types (`var mu sync.Mutex`) and pointer types (`*sync.WaitGroup`)
+- WaitGroup zero-count start means `wg.Wait()` with no prior `wg.Add()` returns immediately (correct Go semantics)
+
+#### Next Steps
+- **Phase 22**: `io.Writer` / `io.Reader`, `os.Stdout/Stderr`, `fmt.Fprintf`
+- **Future**: `sync.RWMutex`, `sync.Once`, GC, self-hosting
+
+### Session 22 - Phase 22: os.Stdout/Stderr + fmt.Fprintf/Fprintln
+#### Completed
+- `os.Stdout`, `os.Stderr`, `os.Stdin` as `*os.File` singleton opaque pointer values
+  - `golangc_file` struct wrapping `FILE*` declared in `runtime.hpp`
+  - `golangc_os_stdout()`, `golangc_os_stderr()`, `golangc_os_stdin()` singletons in new `src/runtime/os_file.cpp`
+  - Lazy initialization (checks `nullptr` then assigns `stdout`/`stderr`/`stdin`)
+- `fmt.Fprintf(w, format, args...)` — lowered to `golangc_fprintf(golangc_file*, fmt_ptr, fmt_len, ...)`
+- `fmt.Fprintln(w, args...)` — lowered to `golangc_fprintf` with format string synthesized at codegen time
+  - Per-arg format specifiers: `%s` for strings, `%g` for floats, `%v` for integers
+  - Args space-separated, `\n` appended
+- `golangc_fprintf` runtime function shares `fmt_custom()` static helper with `golangc_printf`
+- `os.File` opaque Named type registered in universe (same pattern as `sync.Mutex`)
+- `TypeExprKind::Qualified` handles `os.File` in type position
+- `check_selector` exposes `OsStdout/OsStderr/OsStdin/FmtFprintf/FmtFprintln` Builtin symbols
+- `gen_selector` handles `os.Stdout/Stderr/Stdin` in non-call position (as arg to Fprintf)
+- `io` pseudo-package registered in universe scope
+- `src/runtime/os_file.cpp` added to `golangc_runtime` in CMakeLists.txt
+- 10 new Phase22Test tests (OsStdoutLoads, OsStderrLoads, FprintfCompilesNoErrors, FprintfEmitsRuntime, FprintfToStderr, FprintfStringArg, FprintlnCompilesNoErrors, FprintlnEmitsRuntime, FprintlnMultiArg, GoFull)
+- `samples/io_demo.go` — Fprintf to stdout/stderr + Fprintln demo
+
+#### Current State
+- All prior tests pass (614 baseline + 10 new = 624 total)
+- `fmt.Fprintf(os.Stderr, "error: %v\n", err)` pattern fully supported
+- `fmt.Fprintln(os.Stdout, "done")` works for any arg count
+
+#### Next Steps
+- **Phase 23**: `bufio.Scanner`, `os.Open/Create`, file I/O
+- **Future**: Full `io.Writer` interface, GC, self-hosting

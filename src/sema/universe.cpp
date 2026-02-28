@@ -18,6 +18,15 @@ Type* g_error_type = nullptr;
 // Singleton strings.Builder pointer type (*strings.Builder)
 Type* g_strings_builder_ptr_type = nullptr;
 
+// Singleton sync.Mutex pointer type (*sync.Mutex)
+Type* g_sync_mutex_ptr_type = nullptr;
+
+// Singleton sync.WaitGroup pointer type (*sync.WaitGroup)
+Type* g_sync_waitgroup_ptr_type = nullptr;
+
+// Singleton os.File pointer type (*os.File)
+Type* g_os_file_ptr_type = nullptr;
+
 void ensure_basic_types_initialized() {
     if (g_basic_types_initialized) return;
     g_basic_types_initialized = true;
@@ -82,6 +91,18 @@ Type* error_type() {
 
 Type* strings_builder_ptr_type() {
     return g_strings_builder_ptr_type;
+}
+
+Type* sync_mutex_ptr_type() {
+    return g_sync_mutex_ptr_type;
+}
+
+Type* sync_waitgroup_ptr_type() {
+    return g_sync_waitgroup_ptr_type;
+}
+
+Type* os_file_ptr_type() {
+    return g_os_file_ptr_type;
 }
 
 Scope* init_universe(ArenaAllocator& arena) {
@@ -176,6 +197,8 @@ Scope* init_universe(ArenaAllocator& arena) {
     (void)scope->insert(make_pseudo_pkg("strings"));
     (void)scope->insert(make_pseudo_pkg("math"));
     (void)scope->insert(make_pseudo_pkg("errors"));
+    (void)scope->insert(make_pseudo_pkg("sync"));
+    (void)scope->insert(make_pseudo_pkg("io"));
 
     // ---- error interface type ----
     // type error interface { Error() string }
@@ -242,6 +265,83 @@ Scope* init_universe(ArenaAllocator& arena) {
     builder_ptr_ty->pointer.base = builder_named_ty;
 
     g_strings_builder_ptr_type = builder_ptr_ty;
+
+    // ---- sync.Mutex opaque named type ----
+    auto* mutex_underlying = arena.create<Type>();
+    mutex_underlying->kind = TypeKind::Basic;
+    mutex_underlying->basic = BasicKind::Uintptr; // opaque handle
+
+    auto* mutex_named = arena.create<NamedType>();
+    mutex_named->name = "sync.Mutex";
+    mutex_named->underlying = mutex_underlying;
+
+    // Build bool func type for TryLock
+    auto* bool_ft_raw = arena.create<FuncType>();
+    bool_ft_raw->results.push_back(FuncParam{"", basic_type(BasicKind::Bool)});
+    auto* bool_ty = arena.create<Type>();
+    bool_ty->kind = TypeKind::Func;
+    bool_ty->func = bool_ft_raw;
+
+    mutex_named->methods.push_back(NamedType::Method{"Lock",    void_ty,  true});
+    mutex_named->methods.push_back(NamedType::Method{"Unlock",  void_ty,  true});
+    mutex_named->methods.push_back(NamedType::Method{"TryLock", bool_ty,  true});
+
+    auto* mutex_named_ty = arena.create<Type>();
+    mutex_named_ty->kind = TypeKind::Named;
+    mutex_named_ty->named = mutex_named;
+
+    auto* mutex_ptr_ty = arena.create<Type>();
+    mutex_ptr_ty->kind = TypeKind::Pointer;
+    mutex_ptr_ty->pointer.base = mutex_named_ty;
+
+    g_sync_mutex_ptr_type = mutex_ptr_ty;
+
+    // ---- sync.WaitGroup opaque named type ----
+    auto* wg_underlying = arena.create<Type>();
+    wg_underlying->kind = TypeKind::Basic;
+    wg_underlying->basic = BasicKind::Uintptr; // opaque handle
+
+    auto* wg_named = arena.create<NamedType>();
+    wg_named->name = "sync.WaitGroup";
+    wg_named->underlying = wg_underlying;
+
+    // Add(delta int) — void; Done() — void; Wait() — void
+    wg_named->methods.push_back(NamedType::Method{"Add",  void_ty,  true});
+    wg_named->methods.push_back(NamedType::Method{"Done", void_ty,  true});
+    wg_named->methods.push_back(NamedType::Method{"Wait", void_ty,  true});
+
+    auto* wg_named_ty = arena.create<Type>();
+    wg_named_ty->kind = TypeKind::Named;
+    wg_named_ty->named = wg_named;
+
+    auto* wg_ptr_ty = arena.create<Type>();
+    wg_ptr_ty->kind = TypeKind::Pointer;
+    wg_ptr_ty->pointer.base = wg_named_ty;
+
+    g_sync_waitgroup_ptr_type = wg_ptr_ty;
+
+    // ---- os.File opaque named type ----
+    auto* file_underlying = arena.create<Type>();
+    file_underlying->kind = TypeKind::Basic;
+    file_underlying->basic = BasicKind::Uintptr; // opaque handle
+
+    auto* file_named = arena.create<NamedType>();
+    file_named->name = "os.File";
+    file_named->underlying = file_underlying;
+
+    // Add stub methods so lookup_method() succeeds and check_selector enters if(method).
+    file_named->methods.push_back(NamedType::Method{"Close",       void_ty, true});
+    file_named->methods.push_back(NamedType::Method{"WriteString", void_ty, true});
+
+    auto* file_named_ty = arena.create<Type>();
+    file_named_ty->kind = TypeKind::Named;
+    file_named_ty->named = file_named;
+
+    auto* file_ptr_ty = arena.create<Type>();
+    file_ptr_ty->kind = TypeKind::Pointer;
+    file_ptr_ty->pointer.base = file_named_ty;
+
+    g_os_file_ptr_type = file_ptr_ty;
 
     return scope;
 }

@@ -4,6 +4,7 @@
 // These are linked into the final executable as golangc_runtime.lib.
 
 #include <cstdint>
+#include <cstdio>
 
 extern "C" {
 
@@ -268,6 +269,73 @@ void golangc_errors_new(char* sret_out, const char* msg_ptr, int64_t msg_len);
 
 /// fmt.Errorf(format string, ...) error — formatted error via sret.
 void golangc_fmt_errorf(char* sret_out, const char* fmt_ptr, int64_t fmt_len, ...);
+
+// ---- sync package ----
+
+struct golangc_mutex;
+
+/// Create a new sync.Mutex (backed by CRITICAL_SECTION).
+golangc_mutex* golangc_mutex_make(void);
+
+/// Lock the mutex (blocks until acquired).
+void golangc_mutex_lock(golangc_mutex* m);
+
+/// Unlock the mutex.
+void golangc_mutex_unlock(golangc_mutex* m);
+
+/// Try to lock the mutex without blocking. Returns 1 if acquired, 0 otherwise.
+int64_t golangc_mutex_try_lock(golangc_mutex* m);
+
+struct golangc_waitgroup;
+
+/// Create a new sync.WaitGroup (backed by CRITICAL_SECTION + event HANDLE).
+golangc_waitgroup* golangc_waitgroup_make(void);
+
+/// Add delta to the WaitGroup counter. Signals done event when counter reaches 0.
+void golangc_waitgroup_add(golangc_waitgroup* wg, int64_t delta);
+
+/// Decrement the WaitGroup counter by 1 (equivalent to Add(-1)).
+void golangc_waitgroup_done(golangc_waitgroup* wg);
+
+/// Block until the WaitGroup counter reaches zero.
+void golangc_waitgroup_wait(golangc_waitgroup* wg);
+
+// ---- os.File handle ----
+
+struct golangc_file { FILE* f; };
+
+/// Return the singleton *os.File for stdout / stderr / stdin.
+golangc_file* golangc_os_stdout(void);
+golangc_file* golangc_os_stderr(void);
+golangc_file* golangc_os_stdin(void);
+
+// ---- fmt.Fprintf ----
+
+/// Write formatted output to a file handle (same format conventions as golangc_printf).
+void golangc_fprintf(golangc_file* f, const char* fmt_ptr, int64_t fmt_len, ...);
+
+// ---- os.Exit ----
+[[noreturn]] void golangc_os_exit(int64_t code);
+
+// ---- os file open/create/close/write ----
+/// Open a file for reading. Returns heap-allocated golangc_file*.
+golangc_file* golangc_os_open(const char* path_ptr, int64_t path_len);
+/// Create/truncate a file for writing. Returns heap-allocated golangc_file*.
+golangc_file* golangc_os_create(const char* path_ptr, int64_t path_len);
+/// Close the file and set f->f = nullptr.
+void golangc_os_file_close(golangc_file* f);
+/// Write a string (ptr+len) to f. Returns bytes written.
+int64_t golangc_os_file_write_string(golangc_file* f, const char* ptr, int64_t len);
+
+// ---- Extended strconv ----
+/// strconv.ParseFloat: parse string to double.
+double golangc_parse_float(const char* ptr, int64_t len);
+/// strconv.FormatFloat: double to string via sret (16-byte {ptr,len}).
+void golangc_format_float(char* sret_out, double value);
+/// strconv.ParseBool: parse string to bool (1/0).
+int64_t golangc_parse_bool(const char* ptr, int64_t len);
+/// strconv.FormatBool: bool to "true"/"false" via sret (16-byte {ptr,len}).
+void golangc_format_bool(char* sret_out, int64_t value);
 
 } // extern "C"
 

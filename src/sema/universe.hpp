@@ -64,6 +64,35 @@ enum class BuiltinId : int {
     ErrorsNew,   // errors.New(msg string) error
     // fmt.Errorf
     FmtErrorf,   // fmt.Errorf(format string, args...) error
+    // sync.Mutex methods (called on a *sync.Mutex receiver)
+    SyncMutexLock,        // mu.Lock()
+    SyncMutexUnlock,      // mu.Unlock()
+    SyncMutexTryLock,     // mu.TryLock() bool
+    // sync.WaitGroup methods (called on a *sync.WaitGroup receiver)
+    SyncWaitGroupAdd,     // wg.Add(delta int)
+    SyncWaitGroupDone,    // wg.Done()
+    SyncWaitGroupWait,    // wg.Wait()
+    // os file handles
+    OsStdout,    // os.Stdout (*os.File)
+    OsStderr,    // os.Stderr (*os.File)
+    OsStdin,     // os.Stdin  (*os.File)
+    // fmt output to writer
+    FmtFprintf,  // fmt.Fprintf(w, format string, args...)
+    FmtFprintln, // fmt.Fprintln(w, args...)
+    // os functions
+    OsExit,      // os.Exit(code int)
+    OsOpen,      // os.Open(name string) (*os.File, error)
+    OsCreate,    // os.Create(name string) (*os.File, error)
+    // os.File methods
+    OsFileClose,         // f.Close() error
+    OsFileWriteString,   // f.WriteString(s string) (int, error)
+    // extended strconv
+    StrconvParseInt,     // strconv.ParseInt(s string, base, bitSize int) (int64, error)
+    StrconvParseFloat,   // strconv.ParseFloat(s string, bitSize int) (float64, error)
+    StrconvFormatInt,    // strconv.FormatInt(i int64, base int) string
+    StrconvFormatFloat,  // strconv.FormatFloat(f float64, fmt byte, prec, bitSize int) string
+    StrconvFormatBool,   // strconv.FormatBool(b bool) string
+    StrconvParseBool,    // strconv.ParseBool(s string) (bool, error)
     // Sentinel
     Count
 };
@@ -81,6 +110,18 @@ enum class BuiltinId : int {
 /// Get the strings.Builder opaque pointer type (*strings.Builder).
 /// Returns nullptr until init_universe() has been called.
 [[nodiscard]] Type* strings_builder_ptr_type();
+
+/// Get the sync.Mutex opaque pointer type (*sync.Mutex).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* sync_mutex_ptr_type();
+
+/// Get the sync.WaitGroup opaque pointer type (*sync.WaitGroup).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* sync_waitgroup_ptr_type();
+
+/// Get the os.File opaque pointer type (*os.File).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* os_file_ptr_type();
 
 } // namespace sema
 } // namespace golangc

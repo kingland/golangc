@@ -360,6 +360,8 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
             info.type = error_type();
             return info;
         }
+        if (sel == "Fprintf")  { info.symbol = make_member_builtin(BuiltinId::FmtFprintf);  info.type = nullptr; return info; }
+        if (sel == "Fprintln") { info.symbol = make_member_builtin(BuiltinId::FmtFprintln); info.type = nullptr; return info; }
     }
 
     if (pkg == "errors") {
@@ -382,6 +384,36 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
             info.type = make_tuple_type({basic_type(BasicKind::Int), error_type()});
             return info;
         }
+        if (sel == "ParseInt") {
+            info.symbol = make_member_builtin(BuiltinId::StrconvParseInt);
+            info.type = make_tuple_type({basic_type(BasicKind::Int64), error_type()});
+            return info;
+        }
+        if (sel == "ParseFloat") {
+            info.symbol = make_member_builtin(BuiltinId::StrconvParseFloat);
+            info.type = make_tuple_type({basic_type(BasicKind::Float64), error_type()});
+            return info;
+        }
+        if (sel == "FormatInt") {
+            info.symbol = make_member_builtin(BuiltinId::StrconvFormatInt);
+            info.type = basic_type(BasicKind::String);
+            return info;
+        }
+        if (sel == "FormatFloat") {
+            info.symbol = make_member_builtin(BuiltinId::StrconvFormatFloat);
+            info.type = basic_type(BasicKind::String);
+            return info;
+        }
+        if (sel == "FormatBool") {
+            info.symbol = make_member_builtin(BuiltinId::StrconvFormatBool);
+            info.type = basic_type(BasicKind::String);
+            return info;
+        }
+        if (sel == "ParseBool") {
+            info.symbol = make_member_builtin(BuiltinId::StrconvParseBool);
+            info.type = make_tuple_type({basic_type(BasicKind::Bool), error_type()});
+            return info;
+        }
     }
 
     if (pkg == "os") {
@@ -389,6 +421,24 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
             info.symbol = make_member_builtin(BuiltinId::OsArgs);
             // os.Args is []string
             info.type = make_slice_type(basic_type(BasicKind::String));
+            return info;
+        }
+        if (sel == "Stdout") { info.symbol = make_member_builtin(BuiltinId::OsStdout); info.type = os_file_ptr_type(); return info; }
+        if (sel == "Stderr") { info.symbol = make_member_builtin(BuiltinId::OsStderr); info.type = os_file_ptr_type(); return info; }
+        if (sel == "Stdin")  { info.symbol = make_member_builtin(BuiltinId::OsStdin);  info.type = os_file_ptr_type(); return info; }
+        if (sel == "Exit") {
+            info.symbol = make_member_builtin(BuiltinId::OsExit);
+            info.type = nullptr;
+            return info;
+        }
+        if (sel == "Open") {
+            info.symbol = make_member_builtin(BuiltinId::OsOpen);
+            info.type = make_tuple_type({os_file_ptr_type(), error_type()});
+            return info;
+        }
+        if (sel == "Create") {
+            info.symbol = make_member_builtin(BuiltinId::OsCreate);
+            info.type = make_tuple_type({os_file_ptr_type(), error_type()});
             return info;
         }
     }
@@ -524,6 +574,94 @@ ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
                     info.type = bm.ret == 1 ? str_ret
                                : bm.ret == 2 ? int_ret
                                              : nullptr;
+                    info.needs_addr_for_recv = false;
+                    return info;
+                }
+            }
+        }
+
+        // sync.Mutex methods: expose as builtin symbols for IR dispatch.
+        if (base->kind == TypeKind::Named && base->named &&
+            base->named->name == "sync.Mutex") {
+            auto* bool_ret = basic_type(BasicKind::Bool);
+            static const struct {
+                std::string_view sel; BuiltinId id; bool returns_bool;
+            } mutex_map[] = {
+                {"Lock",    BuiltinId::SyncMutexLock,    false},
+                {"Unlock",  BuiltinId::SyncMutexUnlock,  false},
+                {"TryLock", BuiltinId::SyncMutexTryLock, true},
+            };
+            for (const auto& mm : mutex_map) {
+                if (sel_name == mm.sel) {
+                    auto* sym = arena_.create<Symbol>();
+                    sym->kind = SymbolKind::Builtin;
+                    sym->builtin_id = static_cast<int>(mm.id);
+                    sym->used = true;
+                    std::string full = "sync.Mutex." + std::string(sel_name);
+                    auto* stored = arena_.allocate_array<char>(full.size() + 1);
+                    std::memcpy(stored, full.data(), full.size() + 1);
+                    sym->name = std::string_view(stored, full.size());
+                    info.symbol = sym;
+                    info.type = mm.returns_bool ? bool_ret : nullptr;
+                    info.needs_addr_for_recv = false;
+                    return info;
+                }
+            }
+        }
+
+        // os.File methods: expose as builtin symbols for IR dispatch.
+        if (base->kind == TypeKind::Named && base->named &&
+            base->named->name == "os.File") {
+            auto* int_ret  = basic_type(BasicKind::Int);
+            static const struct {
+                std::string_view sel; BuiltinId id; bool returns_int;
+            } file_map[] = {
+                {"Close",       BuiltinId::OsFileClose,       false},
+                {"WriteString", BuiltinId::OsFileWriteString, true},
+            };
+            for (const auto& fm : file_map) {
+                if (sel_name == fm.sel) {
+                    auto* sym = arena_.create<Symbol>();
+                    sym->kind = SymbolKind::Builtin;
+                    sym->builtin_id = static_cast<int>(fm.id);
+                    sym->used = true;
+                    std::string full = "os.File." + std::string(sel_name);
+                    auto* stored = arena_.allocate_array<char>(full.size() + 1);
+                    std::memcpy(stored, full.data(), full.size() + 1);
+                    sym->name = std::string_view(stored, full.size());
+                    info.symbol = sym;
+                    if (fm.returns_int)
+                        info.type = make_tuple_type({int_ret, error_type()});
+                    else
+                        info.type = error_type();
+                    info.needs_addr_for_recv = false;
+                    return info;
+                }
+            }
+        }
+
+        // sync.WaitGroup methods: expose as builtin symbols for IR dispatch.
+        if (base->kind == TypeKind::Named && base->named &&
+            base->named->name == "sync.WaitGroup") {
+            static const struct {
+                std::string_view sel; BuiltinId id;
+            } wg_map[] = {
+                {"Add",  BuiltinId::SyncWaitGroupAdd},
+                {"Done", BuiltinId::SyncWaitGroupDone},
+                {"Wait", BuiltinId::SyncWaitGroupWait},
+            };
+            for (const auto& wm : wg_map) {
+                if (sel_name == wm.sel) {
+                    auto* sym = arena_.create<Symbol>();
+                    sym->kind = SymbolKind::Builtin;
+                    sym->builtin_id = static_cast<int>(wm.id);
+                    sym->used = true;
+                    std::string full = "sync.WaitGroup." + std::string(sel_name);
+                    auto* stored = arena_.allocate_array<char>(full.size() + 1);
+                    std::memcpy(stored, full.data(), full.size() + 1);
+                    sym->name = std::string_view(stored, full.size());
+                    info.symbol = sym;
+                    info.type = nullptr; // all void
                     info.needs_addr_for_recv = false;
                     return info;
                 }

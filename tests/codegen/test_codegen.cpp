@@ -3695,4 +3695,523 @@ func main() {
     EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
 }
 
+// ============================================================================
+// Phase 21 Tests: sync.Mutex + sync.WaitGroup
+// ============================================================================
+
+TEST(Phase21Test, MutexCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func main() {
+    var mu sync.Mutex
+    mu.Lock()
+    mu.Unlock()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase21Test, MutexEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func main() {
+    var mu sync.Mutex
+    mu.Lock()
+    mu.Unlock()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_mutex_lock"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_mutex_unlock"));
+}
+
+TEST(Phase21Test, MutexTryLock) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func main() {
+    var mu sync.Mutex
+    ok := mu.TryLock()
+    if ok {
+        mu.Unlock()
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_mutex_try_lock"));
+}
+
+TEST(Phase21Test, MutexZeroValueInit) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func main() {
+    var mu sync.Mutex
+    mu.Lock()
+    mu.Unlock()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_mutex_make"));
+}
+
+TEST(Phase21Test, WaitGroupCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func main() {
+    var wg sync.WaitGroup
+    wg.Add(1)
+    wg.Done()
+    wg.Wait()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase21Test, WaitGroupEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func main() {
+    var wg sync.WaitGroup
+    wg.Add(1)
+    wg.Done()
+    wg.Wait()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_waitgroup_add"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_waitgroup_done"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_waitgroup_wait"));
+}
+
+TEST(Phase21Test, WaitGroupZeroValueInit) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func main() {
+    var wg sync.WaitGroup
+    wg.Wait()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_waitgroup_make"));
+}
+
+TEST(Phase21Test, MutexProtectedCounter) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+var counter int
+var mu sync.Mutex
+func increment() {
+    mu.Lock()
+    counter = counter + 1
+    mu.Unlock()
+}
+func main() {
+    go increment()
+    go increment()
+    mu.Lock()
+    _ = counter
+    mu.Unlock()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_mutex_lock"));
+}
+
+TEST(Phase21Test, WaitGroupWithGoroutines) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func worker(wg *sync.WaitGroup) {
+    wg.Done()
+}
+func main() {
+    var wg sync.WaitGroup
+    wg.Add(1)
+    go worker(&wg)
+    wg.Wait()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_waitgroup_add"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_waitgroup_wait"));
+}
+
+TEST(Phase21Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "sync"
+    "fmt"
+)
+func main() {
+    var mu sync.Mutex
+    var counter int
+    mu.Lock()
+    counter = counter + 1
+    mu.Unlock()
+
+    var wg sync.WaitGroup
+    wg.Add(1)
+    wg.Done()
+    wg.Wait()
+
+    fmt.Println(counter)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_mutex_make"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_waitgroup_make"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_mutex_lock"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_waitgroup_wait"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+// ============================================================================
+// Phase 22: os.Stdout/Stderr + fmt.Fprintf/Fprintln
+// ============================================================================
+
+TEST(Phase22Test, OsStdoutLoads) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    _ = os.Stdout
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_stdout"));
+}
+
+TEST(Phase22Test, OsStderrLoads) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    _ = os.Stderr
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_stderr"));
+}
+
+TEST(Phase22Test, FprintfCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+)
+func main() {
+    fmt.Fprintf(os.Stdout, "x=%d\n", 42)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase22Test, FprintfEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+)
+func main() {
+    fmt.Fprintf(os.Stdout, "x=%d\n", 42)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_fprintf"));
+}
+
+TEST(Phase22Test, FprintfToStderr) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+)
+func main() {
+    fmt.Fprintf(os.Stderr, "err: %s\n", "msg")
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_stderr"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_fprintf"));
+}
+
+TEST(Phase22Test, FprintfStringArg) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+)
+func main() {
+    name := "world"
+    fmt.Fprintf(os.Stdout, "Hello, %s!\n", name)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_fprintf"));
+}
+
+TEST(Phase22Test, FprintlnCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+)
+func main() {
+    fmt.Fprintln(os.Stdout, "hello")
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase22Test, FprintlnEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+)
+func main() {
+    fmt.Fprintln(os.Stdout, "hello")
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_fprintf"));
+}
+
+TEST(Phase22Test, FprintlnMultiArg) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+)
+func main() {
+    fmt.Fprintln(os.Stdout, "x=", 42)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_fprintf"));
+}
+
+TEST(Phase22Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+)
+func main() {
+    fmt.Printf("value: %d\n", 99)
+    fmt.Fprintf(os.Stdout, "stdout: %s\n", "ok")
+    fmt.Fprintf(os.Stderr, "stderr: %d\n", 0)
+    fmt.Fprintln(os.Stdout, "done")
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_printf"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_fprintf"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_stdout"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_stderr"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+// ============================================================================
+// Phase 23 Tests: os.Exit + Extended strconv + File I/O Basics
+// ============================================================================
+
+TEST(Phase23Test, OsExitCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    os.Exit(0)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase23Test, OsExitEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    os.Exit(0)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_exit"));
+}
+
+TEST(Phase23Test, OsExitNonZero) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    os.Exit(1)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_exit"));
+}
+
+TEST(Phase23Test, OsOpenCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    f, _ := os.Open("x.txt")
+    _ = f
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase23Test, OsOpenEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    f, _ := os.Open("x.txt")
+    _ = f
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_open"));
+}
+
+TEST(Phase23Test, OsCreateCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    f, _ := os.Create("out.txt")
+    _ = f
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase23Test, OsFileCloseCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    f, _ := os.Create("out.txt")
+    f.Close()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase23Test, OsFileWriteStringCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    f, _ := os.Create("out.txt")
+    f.WriteString("hello")
+    f.Close()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase23Test, StrconvParseIntCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strconv"
+func main() {
+    n, _ := strconv.ParseInt("42", 10, 64)
+    _ = n
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase23Test, StrconvParseFloatCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strconv"
+func main() {
+    x, _ := strconv.ParseFloat("3.14", 64)
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase23Test, StrconvFormatIntCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strconv"
+func main() {
+    s := strconv.FormatInt(42, 10)
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase23Test, StrconvFormatFloatCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strconv"
+func main() {
+    s := strconv.FormatFloat(3.14, 'f', 2, 64)
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase23Test, StrconvFormatBoolCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strconv"
+func main() {
+    s := strconv.FormatBool(true)
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase23Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+    "strconv"
+)
+func main() {
+    f, _ := os.Create("output.txt")
+    f.WriteString("hello, file!\n")
+    f.Close()
+    n, _ := strconv.ParseInt("123", 10, 64)
+    x, _ := strconv.ParseFloat("3.14", 64)
+    fmt.Fprintf(os.Stdout, "n=%d x=%s\n", n, strconv.FormatFloat(x, 'f', 2, 64))
+    fmt.Println(strconv.FormatBool(true))
+    os.Exit(0)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_exit"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_create"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_parse_float"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
 

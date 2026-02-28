@@ -612,6 +612,18 @@ Value* IRGenerator::gen_selector(ast::Expr* expr) {
             auto* fn = get_or_declare_runtime("golangc_os_args_get", type_map_.slice_type());
             return builder_.create_call(fn, {}, type_map_.slice_type(), "os.Args");
         }
+        if (bname == "os.Stdout") {
+            auto* fn = get_or_declare_runtime("golangc_os_stdout", type_map_.ptr_type());
+            return builder_.create_call(fn, {}, type_map_.ptr_type(), "os.Stdout");
+        }
+        if (bname == "os.Stderr") {
+            auto* fn = get_or_declare_runtime("golangc_os_stderr", type_map_.ptr_type());
+            return builder_.create_call(fn, {}, type_map_.ptr_type(), "os.Stderr");
+        }
+        if (bname == "os.Stdin") {
+            auto* fn = get_or_declare_runtime("golangc_os_stdin", type_map_.ptr_type());
+            return builder_.create_call(fn, {}, type_map_.ptr_type(), "os.Stdin");
+        }
     }
 
     auto* addr = gen_addr(expr);
@@ -1143,11 +1155,210 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
         return builder_.create_const_int(type_map_.i64_type(), 0, "atoi.zero");
     }
 
+    // ---- strconv.ParseInt(s, base, bitSize) → (int64, error) — reuses golangc_atoi ----
+    if (builtin_name == "strconv.ParseInt") {
+        if (call.args.count >= 1) {
+            auto* s = gen_expr(call.args[0]);
+            if (s) {
+                auto* null_ok = builder_.create_const_nil(type_map_.ptr_type(), "no.ok");
+                auto* fn = get_or_declare_runtime("golangc_atoi", type_map_.i64_type());
+                auto* int_val = builder_.create_call(fn, {s, null_ok}, type_map_.i64_type(), "parseInt");
+                auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+                std::vector<IRType*> fields = {type_map_.i64_type(), type_map_.interface_type()};
+                auto* packed = builder_.create_const_nil(type_map_.make_tuple_type(std::move(fields)), "parseInt.pack");
+                packed = builder_.create_insert_value(packed, int_val, 0, "parseInt.pack");
+                packed = builder_.create_insert_value(packed, nil_err, 1, "parseInt.pack");
+                return packed;
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "parseInt.zero");
+    }
+
+    // ---- strconv.FormatInt(i, base) → string — reuses golangc_itoa ----
+    if (builtin_name == "strconv.FormatInt") {
+        if (call.args.count >= 1) {
+            auto* n = gen_expr(call.args[0]);
+            if (n) {
+                auto* fn = get_or_declare_runtime("golangc_itoa", type_map_.string_type());
+                return builder_.create_call(fn, {n}, type_map_.string_type(), "formatInt");
+            }
+        }
+        return builder_.create_const_string("0", "formatInt.zero");
+    }
+
+    // ---- strconv.ParseFloat(s, bitSize) → (float64, error) ----
+    if (builtin_name == "strconv.ParseFloat") {
+        if (call.args.count >= 1) {
+            auto* s = gen_expr(call.args[0]);
+            if (s) {
+                auto* fn = get_or_declare_runtime("golangc_parse_float", type_map_.f64_type());
+                auto* f_val = builder_.create_call(fn, {s}, type_map_.f64_type(), "parseFloat");
+                auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+                std::vector<IRType*> fields = {type_map_.f64_type(), type_map_.interface_type()};
+                auto* packed = builder_.create_const_nil(type_map_.make_tuple_type(std::move(fields)), "parseFloat.pack");
+                packed = builder_.create_insert_value(packed, f_val, 0, "parseFloat.pack");
+                packed = builder_.create_insert_value(packed, nil_err, 1, "parseFloat.pack");
+                return packed;
+            }
+        }
+        return builder_.create_const_int(type_map_.f64_type(), 0, "parseFloat.zero");
+    }
+
+    // ---- strconv.FormatFloat(f, fmt, prec, bitSize) → string ----
+    if (builtin_name == "strconv.FormatFloat") {
+        if (call.args.count >= 1) {
+            auto* f = gen_expr(call.args[0]);
+            if (f) {
+                auto* fn = get_or_declare_runtime("golangc_format_float", type_map_.string_type());
+                return builder_.create_call(fn, {f}, type_map_.string_type(), "formatFloat");
+            }
+        }
+        return builder_.create_const_string("0", "formatFloat.zero");
+    }
+
+    // ---- strconv.ParseBool(s) → (bool, error) ----
+    if (builtin_name == "strconv.ParseBool") {
+        if (call.args.count >= 1) {
+            auto* s = gen_expr(call.args[0]);
+            if (s) {
+                auto* fn = get_or_declare_runtime("golangc_parse_bool", type_map_.i64_type());
+                auto* b_val = builder_.create_call(fn, {s}, type_map_.i64_type(), "parseBool");
+                auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+                std::vector<IRType*> fields = {type_map_.i64_type(), type_map_.interface_type()};
+                auto* packed = builder_.create_const_nil(type_map_.make_tuple_type(std::move(fields)), "parseBool.pack");
+                packed = builder_.create_insert_value(packed, b_val, 0, "parseBool.pack");
+                packed = builder_.create_insert_value(packed, nil_err, 1, "parseBool.pack");
+                return packed;
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "parseBool.zero");
+    }
+
+    // ---- strconv.FormatBool(b) → string ----
+    if (builtin_name == "strconv.FormatBool") {
+        if (call.args.count >= 1) {
+            auto* b = gen_expr(call.args[0]);
+            if (b) {
+                auto* fn = get_or_declare_runtime("golangc_format_bool", type_map_.string_type());
+                return builder_.create_call(fn, {b}, type_map_.string_type(), "formatBool");
+            }
+        }
+        return builder_.create_const_string("false", "formatBool.zero");
+    }
+
     // ---- os.Args — call golangc_os_args_get() which loads the global slice ----
     if (builtin_name == "os.Args") {
         // Emit a call to a tiny wrapper that returns the os.Args slice by value.
         auto* fn = get_or_declare_runtime("golangc_os_args_get", type_map_.slice_type());
         return builder_.create_call(fn, {}, type_map_.slice_type(), "os.Args");
+    }
+
+    // ---- os.Stdout / os.Stderr / os.Stdin ----
+    if (builtin_name == "os.Stdout") {
+        auto* fn = get_or_declare_runtime("golangc_os_stdout", type_map_.ptr_type());
+        return builder_.create_call(fn, {}, type_map_.ptr_type(), "os.Stdout");
+    }
+    if (builtin_name == "os.Stderr") {
+        auto* fn = get_or_declare_runtime("golangc_os_stderr", type_map_.ptr_type());
+        return builder_.create_call(fn, {}, type_map_.ptr_type(), "os.Stderr");
+    }
+    if (builtin_name == "os.Stdin") {
+        auto* fn = get_or_declare_runtime("golangc_os_stdin", type_map_.ptr_type());
+        return builder_.create_call(fn, {}, type_map_.ptr_type(), "os.Stdin");
+    }
+
+    // ---- os.Exit(code) ----
+    if (builtin_name == "os.Exit") {
+        Value* code = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+        if (!code) code = builder_.create_const_int(type_map_.i64_type(), 0, "exit.code");
+        auto* fn = get_or_declare_runtime("golangc_os_exit", type_map_.void_type());
+        builder_.create_call(fn, {code}, type_map_.void_type(), "os.Exit");
+        builder_.create_ret(nullptr);  // terminate basic block (exit never returns)
+        return builder_.create_const_int(type_map_.i64_type(), 0, "exit.dead");
+    }
+
+    // ---- os.Open(path) → (*os.File, error) ----
+    if (builtin_name == "os.Open") {
+        if (call.args.count >= 1) {
+            auto* path = gen_expr(call.args[0]);
+            if (path) {
+                auto* fn = get_or_declare_runtime("golangc_os_open", type_map_.ptr_type());
+                auto* file_ptr = builder_.create_call(fn, {path}, type_map_.ptr_type(), "os.Open");
+                auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+                std::vector<IRType*> fields = {type_map_.ptr_type(), type_map_.interface_type()};
+                IRType* tuple_ir = type_map_.make_tuple_type(std::move(fields));
+                auto* packed = builder_.create_const_nil(tuple_ir, "open.pack");
+                packed = builder_.create_insert_value(packed, file_ptr, 0, "open.pack");
+                packed = builder_.create_insert_value(packed, nil_err, 1, "open.pack");
+                return packed;
+            }
+        }
+        return builder_.create_const_nil(type_map_.ptr_type(), "open.nil");
+    }
+
+    // ---- os.Create(path) → (*os.File, error) ----
+    if (builtin_name == "os.Create") {
+        if (call.args.count >= 1) {
+            auto* path = gen_expr(call.args[0]);
+            if (path) {
+                auto* fn = get_or_declare_runtime("golangc_os_create", type_map_.ptr_type());
+                auto* file_ptr = builder_.create_call(fn, {path}, type_map_.ptr_type(), "os.Create");
+                auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+                std::vector<IRType*> fields = {type_map_.ptr_type(), type_map_.interface_type()};
+                IRType* tuple_ir = type_map_.make_tuple_type(std::move(fields));
+                auto* packed = builder_.create_const_nil(tuple_ir, "create.pack");
+                packed = builder_.create_insert_value(packed, file_ptr, 0, "create.pack");
+                packed = builder_.create_insert_value(packed, nil_err, 1, "create.pack");
+                return packed;
+            }
+        }
+        return builder_.create_const_nil(type_map_.ptr_type(), "create.nil");
+    }
+
+    // ---- fmt.Fprintf(w, format, args...) ----
+    if (builtin_name == "fmt.Fprintf") {
+        if (call.args.count >= 2) {
+            auto* w   = gen_expr(call.args[0]);
+            auto* fmt = gen_expr(call.args[1]);
+            if (w && fmt) {
+                auto* fn = get_or_declare_runtime("golangc_fprintf", type_map_.void_type());
+                std::vector<Value*> args = {w, fmt};
+                for (uint32_t i = 2; i < call.args.count; ++i) {
+                    auto* a = gen_expr(call.args[i]);
+                    if (a) args.push_back(a);
+                }
+                return builder_.create_call(fn, args, type_map_.void_type(), "fprintf");
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "fprintf.nop");
+    }
+
+    // ---- fmt.Fprintln(w, args...) → golangc_fprintf(w, "<fmt>\n", args...) ----
+    if (builtin_name == "fmt.Fprintln") {
+        if (call.args.count >= 1) {
+            auto* w = gen_expr(call.args[0]);
+            if (w) {
+                // Build format string: space-separated %d/%s/%g per remaining arg, then \n
+                std::string fmt_str;
+                std::vector<Value*> fmt_args = {w};
+                for (uint32_t i = 1; i < call.args.count; ++i) {
+                    if (i > 1) fmt_str += " ";
+                    auto* a = gen_expr(call.args[i]);
+                    if (!a) continue;
+                    if (a->type == type_map_.string_type())       fmt_str += "%s";
+                    else if (a->type && a->type->is_float())      fmt_str += "%g";
+                    else                                           fmt_str += "%v";
+                    fmt_args.push_back(a);
+                }
+                fmt_str += "\n";
+                auto* fmt_val = builder_.create_const_string(fmt_str, "fprintln.fmt");
+                // Insert format string as second argument (after w)
+                fmt_args.insert(fmt_args.begin() + 1, fmt_val);
+                auto* fn = get_or_declare_runtime("golangc_fprintf", type_map_.void_type());
+                return builder_.create_call(fn, fmt_args, type_map_.void_type(), "fprintln");
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "fprintln.nop");
     }
 
     // ---- strings package ----
@@ -1445,6 +1656,84 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
             return builder_.create_call(fn, {recv}, type_map_.i64_type(), "Len");
         }
         return builder_.create_const_int(type_map_.i64_type(), 0, "builder.unknown");
+    }
+
+    // ---- sync.Mutex methods ----
+    if (builtin_name.size() > 11 &&
+        builtin_name.compare(0, 11, "sync.Mutex.") == 0) {
+        Value* recv = nullptr;
+        if (call.func->kind == ast::ExprKind::Selector) {
+            recv = gen_expr(call.func->selector.x);
+        }
+        if (!recv) return builder_.create_const_int(type_map_.i64_type(), 0, "mutex.norecv");
+
+        if (builtin_name == "sync.Mutex.Lock") {
+            auto* fn = get_or_declare_runtime("golangc_mutex_lock", type_map_.void_type());
+            return builder_.create_call(fn, {recv}, type_map_.void_type(), "Lock");
+        }
+        if (builtin_name == "sync.Mutex.Unlock") {
+            auto* fn = get_or_declare_runtime("golangc_mutex_unlock", type_map_.void_type());
+            return builder_.create_call(fn, {recv}, type_map_.void_type(), "Unlock");
+        }
+        if (builtin_name == "sync.Mutex.TryLock") {
+            auto* fn = get_or_declare_runtime("golangc_mutex_try_lock", type_map_.i64_type());
+            return builder_.create_call(fn, {recv}, type_map_.i64_type(), "TryLock");
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "mutex.unknown");
+    }
+
+    // ---- sync.WaitGroup methods ----
+    if (builtin_name.size() > 15 &&
+        builtin_name.compare(0, 15, "sync.WaitGroup.") == 0) {
+        Value* recv = nullptr;
+        if (call.func->kind == ast::ExprKind::Selector) {
+            recv = gen_expr(call.func->selector.x);
+        }
+        if (!recv) return builder_.create_const_int(type_map_.i64_type(), 0, "wg.norecv");
+
+        if (builtin_name == "sync.WaitGroup.Add") {
+            Value* delta = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!delta) delta = builder_.create_const_int(type_map_.i64_type(), 0, "wg.delta");
+            auto* fn = get_or_declare_runtime("golangc_waitgroup_add", type_map_.void_type());
+            return builder_.create_call(fn, {recv, delta}, type_map_.void_type(), "Add");
+        }
+        if (builtin_name == "sync.WaitGroup.Done") {
+            auto* fn = get_or_declare_runtime("golangc_waitgroup_done", type_map_.void_type());
+            return builder_.create_call(fn, {recv}, type_map_.void_type(), "Done");
+        }
+        if (builtin_name == "sync.WaitGroup.Wait") {
+            auto* fn = get_or_declare_runtime("golangc_waitgroup_wait", type_map_.void_type());
+            return builder_.create_call(fn, {recv}, type_map_.void_type(), "Wait");
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "wg.unknown");
+    }
+
+    // ---- os.File methods ----
+    if (builtin_name.size() > 8 && builtin_name.compare(0, 8, "os.File.") == 0) {
+        Value* recv = nullptr;
+        if (call.func->kind == ast::ExprKind::Selector) {
+            recv = gen_expr(call.func->selector.x);
+        }
+        if (!recv) return builder_.create_const_int(type_map_.i64_type(), 0, "file.norecv");
+
+        if (builtin_name == "os.File.Close") {
+            auto* fn = get_or_declare_runtime("golangc_os_file_close", type_map_.void_type());
+            builder_.create_call(fn, {recv}, type_map_.void_type(), "Close");
+            return builder_.create_const_nil(type_map_.interface_type(), "close.nil.err");
+        }
+        if (builtin_name == "os.File.WriteString") {
+            Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!s) return builder_.create_const_int(type_map_.i64_type(), 0, "file.noarg");
+            auto* fn = get_or_declare_runtime("golangc_os_file_write_string", type_map_.i64_type());
+            auto* n = builder_.create_call(fn, {recv, s}, type_map_.i64_type(), "WriteString");
+            auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+            std::vector<IRType*> fields = {type_map_.i64_type(), type_map_.interface_type()};
+            auto* packed = builder_.create_const_nil(type_map_.make_tuple_type(std::move(fields)), "ws.pack");
+            packed = builder_.create_insert_value(packed, n, 0, "ws.pack");
+            packed = builder_.create_insert_value(packed, nil_err, 1, "ws.pack");
+            return packed;
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "file.unknown");
     }
 
     // ---- errors.New(msg) → golangc_errors_new(ptr, len) returns interface via sret ----
