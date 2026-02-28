@@ -337,6 +337,27 @@ int64_t golangc_parse_bool(const char* ptr, int64_t len);
 /// strconv.FormatBool: bool to "true"/"false" via sret (16-byte {ptr,len}).
 void golangc_format_bool(char* sret_out, int64_t value);
 
+// ---- bufio package ----
+
+struct golangc_scanner;
+struct golangc_breader;
+
+/// Create a scanner wrapping a file handle.
+golangc_scanner* golangc_scanner_new(golangc_file* f);
+/// Advance scanner to next line. Returns 1 if a line was read, 0 at EOF.
+int64_t golangc_scanner_scan(golangc_scanner* s);
+/// Return the last scanned line (without newline) via sret (16-byte {ptr,len}).
+void golangc_scanner_text(char* sret_out, golangc_scanner* s);
+
+/// Create a buffered reader wrapping a file handle.
+golangc_breader* golangc_breader_new(golangc_file* f);
+/// Read until delim (inclusive), returns string via sret. EOF → empty string.
+void golangc_breader_read_string(char* sret_out, golangc_breader* r, int64_t delim);
+
+// ---- os.ReadFile ----
+/// Read entire file into a slice (heap-allocated). Returns {ptr, len, cap} via sret.
+void golangc_os_read_file(char* sret_out, const char* path_ptr, int64_t path_len);
+
 } // extern "C"
 
 /// Global closure env pointer — set by ClosureMake, read at indirect call sites.

@@ -27,6 +27,12 @@ Type* g_sync_waitgroup_ptr_type = nullptr;
 // Singleton os.File pointer type (*os.File)
 Type* g_os_file_ptr_type = nullptr;
 
+// Singleton bufio.Scanner pointer type (*bufio.Scanner)
+Type* g_bufio_scanner_ptr_type = nullptr;
+
+// Singleton bufio.Reader pointer type (*bufio.Reader)
+Type* g_bufio_reader_ptr_type = nullptr;
+
 void ensure_basic_types_initialized() {
     if (g_basic_types_initialized) return;
     g_basic_types_initialized = true;
@@ -103,6 +109,14 @@ Type* sync_waitgroup_ptr_type() {
 
 Type* os_file_ptr_type() {
     return g_os_file_ptr_type;
+}
+
+Type* bufio_scanner_ptr_type() {
+    return g_bufio_scanner_ptr_type;
+}
+
+Type* bufio_reader_ptr_type() {
+    return g_bufio_reader_ptr_type;
 }
 
 Scope* init_universe(ArenaAllocator& arena) {
@@ -199,6 +213,7 @@ Scope* init_universe(ArenaAllocator& arena) {
     (void)scope->insert(make_pseudo_pkg("errors"));
     (void)scope->insert(make_pseudo_pkg("sync"));
     (void)scope->insert(make_pseudo_pkg("io"));
+    (void)scope->insert(make_pseudo_pkg("bufio"));
 
     // ---- error interface type ----
     // type error interface { Error() string }
@@ -342,6 +357,48 @@ Scope* init_universe(ArenaAllocator& arena) {
     file_ptr_ty->pointer.base = file_named_ty;
 
     g_os_file_ptr_type = file_ptr_ty;
+
+    // ---- bufio.Scanner opaque named type ----
+    auto* scanner_underlying = arena.create<Type>();
+    scanner_underlying->kind = TypeKind::Basic;
+    scanner_underlying->basic = BasicKind::Uintptr;
+
+    auto* scanner_named = arena.create<NamedType>();
+    scanner_named->name = "bufio.Scanner";
+    scanner_named->underlying = scanner_underlying;
+    scanner_named->methods.push_back(NamedType::Method{"Scan", void_ty, true});
+    scanner_named->methods.push_back(NamedType::Method{"Text", void_ty, true});
+    scanner_named->methods.push_back(NamedType::Method{"Err",  void_ty, true});
+
+    auto* scanner_named_ty = arena.create<Type>();
+    scanner_named_ty->kind = TypeKind::Named;
+    scanner_named_ty->named = scanner_named;
+
+    auto* scanner_ptr_ty = arena.create<Type>();
+    scanner_ptr_ty->kind = TypeKind::Pointer;
+    scanner_ptr_ty->pointer.base = scanner_named_ty;
+
+    g_bufio_scanner_ptr_type = scanner_ptr_ty;
+
+    // ---- bufio.Reader opaque named type ----
+    auto* breader_underlying = arena.create<Type>();
+    breader_underlying->kind = TypeKind::Basic;
+    breader_underlying->basic = BasicKind::Uintptr;
+
+    auto* breader_named = arena.create<NamedType>();
+    breader_named->name = "bufio.Reader";
+    breader_named->underlying = breader_underlying;
+    breader_named->methods.push_back(NamedType::Method{"ReadString", void_ty, true});
+
+    auto* breader_named_ty = arena.create<Type>();
+    breader_named_ty->kind = TypeKind::Named;
+    breader_named_ty->named = breader_named;
+
+    auto* breader_ptr_ty = arena.create<Type>();
+    breader_ptr_ty->kind = TypeKind::Pointer;
+    breader_ptr_ty->pointer.base = breader_named_ty;
+
+    g_bufio_reader_ptr_type = breader_ptr_ty;
 
     return scope;
 }

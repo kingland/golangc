@@ -2918,6 +2918,236 @@ func main() {
     EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
 }
 
+// ============================================================================
+// Phase 24 Tests: bufio.Scanner + bufio.NewReader + os.ReadFile
+// ============================================================================
+
+TEST(Phase24Test, BufioNewScannerCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func main() {
+    s := bufio.NewScanner(os.Stdin)
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase24Test, BufioNewScannerEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func main() {
+    s := bufio.NewScanner(os.Stdin)
+    _ = s
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_scanner_new"));
+}
+
+TEST(Phase24Test, BufioScannerScanCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func main() {
+    s := bufio.NewScanner(os.Stdin)
+    _ = s.Scan()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase24Test, BufioScannerScanEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func main() {
+    s := bufio.NewScanner(os.Stdin)
+    _ = s.Scan()
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_scanner_scan"));
+}
+
+TEST(Phase24Test, BufioScannerTextCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func main() {
+    s := bufio.NewScanner(os.Stdin)
+    _ = s.Scan()
+    _ = s.Text()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase24Test, BufioScannerTextEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func main() {
+    s := bufio.NewScanner(os.Stdin)
+    _ = s.Scan()
+    _ = s.Text()
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_scanner_text"));
+}
+
+TEST(Phase24Test, BufioNewReaderCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func main() {
+    r := bufio.NewReader(os.Stdin)
+    _ = r
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase24Test, BufioReaderReadStringCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func main() {
+    r := bufio.NewReader(os.Stdin)
+    line, _ := r.ReadString('\n')
+    _ = line
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase24Test, BufioReaderReadStringEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func main() {
+    r := bufio.NewReader(os.Stdin)
+    line, _ := r.ReadString('\n')
+    _ = line
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_breader_read_string"));
+}
+
+TEST(Phase24Test, OsReadFileCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    data, _ := os.ReadFile("x.txt")
+    _ = data
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase24Test, OsReadFileEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    data, _ := os.ReadFile("x.txt")
+    _ = data
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_read_file"));
+}
+
+TEST(Phase24Test, ScannerLoopCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func main() {
+    s := bufio.NewScanner(os.Stdin)
+    for s.Scan() {
+        _ = s.Text()
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase24Test, ScannerLoopWithFmt) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "fmt"
+    "os"
+)
+func main() {
+    s := bufio.NewScanner(os.Stdin)
+    for s.Scan() {
+        fmt.Println(s.Text())
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase24Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "fmt"
+    "os"
+)
+func main() {
+    f, _ := os.Open("input.txt")
+    scanner := bufio.NewScanner(f)
+    for scanner.Scan() {
+        fmt.Println(scanner.Text())
+    }
+    f.Close()
+    reader := bufio.NewReader(os.Stdin)
+    line, _ := reader.ReadString('\n')
+    fmt.Println(line)
+    data, _ := os.ReadFile("input.txt")
+    _ = data
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_scanner_new"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_breader_read_string"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_read_file"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
 
 // ============================================================================
 // NamedType tests (Phase 17)

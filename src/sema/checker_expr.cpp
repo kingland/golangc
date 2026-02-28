@@ -441,6 +441,11 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
             info.type = make_tuple_type({os_file_ptr_type(), error_type()});
             return info;
         }
+        if (sel == "ReadFile") {
+            info.symbol = make_member_builtin(BuiltinId::OsReadFile);
+            info.type = make_tuple_type({make_slice_type(basic_type(BasicKind::Uint8)), error_type()});
+            return info;
+        }
     }
 
     if (pkg == "strings") {
@@ -476,6 +481,19 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
         if (sel == "Log")   { info.symbol = make_member_builtin(BuiltinId::MathLog);   info.type = f64_type; return info; }
         if (sel == "Log2")  { info.symbol = make_member_builtin(BuiltinId::MathLog2);  info.type = f64_type; return info; }
         if (sel == "Log10") { info.symbol = make_member_builtin(BuiltinId::MathLog10); info.type = f64_type; return info; }
+    }
+
+    if (pkg == "bufio") {
+        if (sel == "NewScanner") {
+            info.symbol = make_member_builtin(BuiltinId::BufioNewScanner);
+            info.type = bufio_scanner_ptr_type();
+            return info;
+        }
+        if (sel == "NewReader") {
+            info.symbol = make_member_builtin(BuiltinId::BufioNewReader);
+            info.type = bufio_reader_ptr_type();
+            return info;
+        }
     }
 
     diag_.error(expr.loc, "undefined: {}.{}", pkg, sel);
@@ -637,6 +655,58 @@ ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
                     info.needs_addr_for_recv = false;
                     return info;
                 }
+            }
+        }
+
+        // bufio.Scanner methods: expose as builtin symbols for IR dispatch.
+        if (base->kind == TypeKind::Named && base->named &&
+            base->named->name == "bufio.Scanner") {
+            auto* bool_ret = basic_type(BasicKind::Bool);
+            auto* str_ret  = basic_type(BasicKind::String);
+            static const struct {
+                std::string_view sel; BuiltinId id; int ret; // 0=void,1=bool,2=str,3=err
+            } scanner_map[] = {
+                {"Scan", BuiltinId::BufioScannerScan, 1},
+                {"Text", BuiltinId::BufioScannerText, 2},
+                {"Err",  BuiltinId::BufioScannerErr,  3},
+            };
+            for (const auto& sm : scanner_map) {
+                if (sel_name == sm.sel) {
+                    auto* sym = arena_.create<Symbol>();
+                    sym->kind = SymbolKind::Builtin;
+                    sym->builtin_id = static_cast<int>(sm.id);
+                    sym->used = true;
+                    std::string full = "bufio.Scanner." + std::string(sel_name);
+                    auto* stored = arena_.allocate_array<char>(full.size() + 1);
+                    std::memcpy(stored, full.data(), full.size() + 1);
+                    sym->name = std::string_view(stored, full.size());
+                    info.symbol = sym;
+                    info.type = sm.ret == 1 ? bool_ret
+                              : sm.ret == 2 ? str_ret
+                              : sm.ret == 3 ? error_type()
+                                            : nullptr;
+                    info.needs_addr_for_recv = false;
+                    return info;
+                }
+            }
+        }
+
+        // bufio.Reader methods: expose as builtin symbols for IR dispatch.
+        if (base->kind == TypeKind::Named && base->named &&
+            base->named->name == "bufio.Reader") {
+            if (sel_name == "ReadString") {
+                auto* sym = arena_.create<Symbol>();
+                sym->kind = SymbolKind::Builtin;
+                sym->builtin_id = static_cast<int>(BuiltinId::BufioReaderReadString);
+                sym->used = true;
+                std::string full = "bufio.Reader.ReadString";
+                auto* stored = arena_.allocate_array<char>(full.size() + 1);
+                std::memcpy(stored, full.data(), full.size() + 1);
+                sym->name = std::string_view(stored, full.size());
+                info.symbol = sym;
+                info.type = make_tuple_type({basic_type(BasicKind::String), error_type()});
+                info.needs_addr_for_recv = false;
+                return info;
             }
         }
 

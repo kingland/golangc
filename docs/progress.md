@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 23 (os.Exit + Extended strconv + File I/O Basics) - Complete
-## Current Milestone: Phase 23 complete - os.Exit, os.Open/Create, (*os.File).Close/WriteString, strconv.ParseInt/ParseFloat/FormatInt/FormatFloat/ParseBool/FormatBool — 14 new Phase23Test tests — files_demo.go sample added (251 codegen tests, 638 total)
-## Completion Estimate: 92%
+## Current Phase: 24 (bufio.Scanner + bufio.NewReader + os.ReadFile) - Complete
+## Current Milestone: Phase 24 complete - bufio.NewScanner, bufio.NewReader, (*bufio.Scanner).Scan/Text/Err, (*bufio.Reader).ReadString, os.ReadFile — 14 new Phase24Test tests — bufio_demo.go sample added (265 codegen tests, 652 total)
+## Completion Estimate: 93%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -14,11 +14,33 @@
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T in call args fixed |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction; spread type check fix; unused param false positive fix |
 | IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq, make_array_type public |
-| CodeGen | ✅ Complete | 251 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, buffered+unbuffered channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os/strings/math/errors/sync pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings.Builder, errors.New, fmt.Errorf, sync.Mutex, sync.WaitGroup, os.Stdout/Stderr/Stdin, fmt.Fprintf, fmt.Fprintln, os.Exit, os.Open/Create, os.File.Close/WriteString, strconv.ParseInt/ParseFloat/FormatInt/FormatFloat/ParseBool/FormatBool |
-| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel (unbuffered+buffered ring buffer) + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get + golangc_string_decode_rune + strings package + math package + golangc_builder_{make,write_string,write_byte,string,reset,len} + golangc_errors_new + golangc_fmt_errorf + golangc_mutex_{make,lock,unlock,try_lock} + golangc_waitgroup_{make,add,done,wait} + golangc_file struct + golangc_os_stdout/stderr/stdin + golangc_fprintf + golangc_os_exit + golangc_os_open/create/file_close/file_write_string + golangc_parse_float/format_float/parse_bool/format_bool (strconv_ext.cpp) |
+| CodeGen | ✅ Complete | 265 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, buffered+unbuffered channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os/strings/math/errors/sync/bufio pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings.Builder, errors.New, fmt.Errorf, sync.Mutex, sync.WaitGroup, os.Stdout/Stderr/Stdin, fmt.Fprintf, fmt.Fprintln, os.Exit, os.Open/Create/ReadFile, os.File.Close/WriteString, strconv.ParseInt/ParseFloat/FormatInt/FormatFloat/ParseBool/FormatBool, bufio.NewScanner/NewReader, bufio.Scanner.Scan/Text/Err, bufio.Reader.ReadString |
+| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel (unbuffered+buffered ring buffer) + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get + golangc_string_decode_rune + strings package + math package + golangc_builder_{make,write_string,write_byte,string,reset,len} + golangc_errors_new + golangc_fmt_errorf + golangc_mutex_{make,lock,unlock,try_lock} + golangc_waitgroup_{make,add,done,wait} + golangc_file struct + golangc_os_stdout/stderr/stdin + golangc_fprintf + golangc_os_exit + golangc_os_open/create/file_close/file_write_string + golangc_parse_float/format_float/parse_bool/format_bool (strconv_ext.cpp) + golangc_scanner_{new,scan,text} + golangc_breader_{new,read_string} + golangc_os_read_file (bufio.cpp) |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
+
+### Session 24 - Phase 24: bufio.Scanner + bufio.NewReader + os.ReadFile (2026-02-28)
+#### Completed
+- `bufio.NewScanner(r io.Reader) *bufio.Scanner` — wraps `golangc_file*`, returns opaque scanner ptr
+- `(*bufio.Scanner).Scan() bool` — calls `golangc_scanner_scan`, returns 1/0
+- `(*bufio.Scanner).Text() string` — calls `golangc_scanner_text` via sret (16-byte {ptr,len})
+- `(*bufio.Scanner).Err() error` — returns nil error (simplified)
+- `bufio.NewReader(r io.Reader) *bufio.Reader` — wraps `golangc_file*`, returns opaque reader ptr
+- `(*bufio.Reader).ReadString(delim byte) (string, error)` — calls `golangc_breader_read_string` via sret
+- `os.ReadFile(name string) ([]byte, error)` — reads entire file into malloc'd slice; returns 24-byte {ptr,len,cap} via sret
+- New runtime file: `src/runtime/bufio.cpp`
+- `bufio` registered as PseudoPkg in `universe.cpp`
+- `bufio.Scanner` and `bufio.Reader` opaque named types in `universe.cpp`
+- Added 14 `Phase24Test` tests (14/14 pass)
+- Added `samples/bufio_demo.go`
+- 265 codegen tests, 652 total — all passing
+#### Current State
+- All 6 test suites pass (652 tests total)
+- `bufio.Scanner` scan loop, `bufio.Reader.ReadString`, `os.ReadFile` all functional
+#### Next Steps
+- Phase 25: `io.Reader`/`io.Writer` interface implementations
+- Phase 26: More complete `fmt.Scan*` family
 
 ### Session 23 - Phase 23: os.Exit + Extended strconv + File I/O Basics (2026-02-28)
 #### Completed

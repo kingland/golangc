@@ -1296,6 +1296,24 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
         return builder_.create_const_nil(type_map_.ptr_type(), "open.nil");
     }
 
+    // ---- os.ReadFile(name) → ([]byte, error) ----
+    if (builtin_name == "os.ReadFile") {
+        if (call.args.count >= 1) {
+            auto* name = gen_expr(call.args[0]);
+            if (name) {
+                auto* fn = get_or_declare_runtime("golangc_os_read_file", type_map_.slice_type());
+                auto* slice_val = builder_.create_call(fn, {name}, type_map_.slice_type(), "os.ReadFile");
+                auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+                std::vector<IRType*> fields = {type_map_.slice_type(), type_map_.interface_type()};
+                auto* packed = builder_.create_const_nil(type_map_.make_tuple_type(std::move(fields)), "readfile.pack");
+                packed = builder_.create_insert_value(packed, slice_val, 0, "readfile.pack");
+                packed = builder_.create_insert_value(packed, nil_err, 1, "readfile.pack");
+                return packed;
+            }
+        }
+        return builder_.create_const_nil(type_map_.slice_type(), "readfile.nil");
+    }
+
     // ---- os.Create(path) → (*os.File, error) ----
     if (builtin_name == "os.Create") {
         if (call.args.count >= 1) {
@@ -1313,6 +1331,30 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
             }
         }
         return builder_.create_const_nil(type_map_.ptr_type(), "create.nil");
+    }
+
+    // ---- bufio.NewScanner(r) → *bufio.Scanner ----
+    if (builtin_name == "bufio.NewScanner") {
+        if (call.args.count >= 1) {
+            auto* r = gen_expr(call.args[0]);
+            if (r) {
+                auto* fn = get_or_declare_runtime("golangc_scanner_new", type_map_.ptr_type());
+                return builder_.create_call(fn, {r}, type_map_.ptr_type(), "bufio.NewScanner");
+            }
+        }
+        return builder_.create_const_nil(type_map_.ptr_type(), "scanner.nil");
+    }
+
+    // ---- bufio.NewReader(r) → *bufio.Reader ----
+    if (builtin_name == "bufio.NewReader") {
+        if (call.args.count >= 1) {
+            auto* r = gen_expr(call.args[0]);
+            if (r) {
+                auto* fn = get_or_declare_runtime("golangc_breader_new", type_map_.ptr_type());
+                return builder_.create_call(fn, {r}, type_map_.ptr_type(), "bufio.NewReader");
+            }
+        }
+        return builder_.create_const_nil(type_map_.ptr_type(), "breader.nil");
     }
 
     // ---- fmt.Fprintf(w, format, args...) ----
@@ -1734,6 +1776,51 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
             return packed;
         }
         return builder_.create_const_int(type_map_.i64_type(), 0, "file.unknown");
+    }
+
+    // ---- bufio.Scanner methods ----
+    if (builtin_name.size() > 14 && builtin_name.compare(0, 14, "bufio.Scanner.") == 0) {
+        Value* recv = nullptr;
+        if (call.func->kind == ast::ExprKind::Selector) {
+            recv = gen_expr(call.func->selector.x);
+        }
+        if (!recv) return builder_.create_const_int(type_map_.i64_type(), 0, "scanner.norecv");
+
+        if (builtin_name == "bufio.Scanner.Scan") {
+            auto* fn = get_or_declare_runtime("golangc_scanner_scan", type_map_.i64_type());
+            return builder_.create_call(fn, {recv}, type_map_.i64_type(), "Scan");
+        }
+        if (builtin_name == "bufio.Scanner.Text") {
+            auto* fn = get_or_declare_runtime("golangc_scanner_text", type_map_.string_type());
+            return builder_.create_call(fn, {recv}, type_map_.string_type(), "Text");
+        }
+        if (builtin_name == "bufio.Scanner.Err") {
+            return builder_.create_const_nil(type_map_.interface_type(), "scanner.err.nil");
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "scanner.unknown");
+    }
+
+    // ---- bufio.Reader methods ----
+    if (builtin_name.size() > 13 && builtin_name.compare(0, 13, "bufio.Reader.") == 0) {
+        Value* recv = nullptr;
+        if (call.func->kind == ast::ExprKind::Selector) {
+            recv = gen_expr(call.func->selector.x);
+        }
+        if (!recv) return builder_.create_const_int(type_map_.i64_type(), 0, "breader.norecv");
+
+        if (builtin_name == "bufio.Reader.ReadString") {
+            Value* delim = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!delim) delim = builder_.create_const_int(type_map_.i64_type(), '\n', "delim.nl");
+            auto* fn = get_or_declare_runtime("golangc_breader_read_string", type_map_.string_type());
+            auto* s = builder_.create_call(fn, {recv, delim}, type_map_.string_type(), "ReadString");
+            auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+            std::vector<IRType*> fields = {type_map_.string_type(), type_map_.interface_type()};
+            auto* packed = builder_.create_const_nil(type_map_.make_tuple_type(std::move(fields)), "rs.pack");
+            packed = builder_.create_insert_value(packed, s, 0, "rs.pack");
+            packed = builder_.create_insert_value(packed, nil_err, 1, "rs.pack");
+            return packed;
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "breader.unknown");
     }
 
     // ---- errors.New(msg) → golangc_errors_new(ptr, len) returns interface via sret ----

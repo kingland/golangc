@@ -93,6 +93,17 @@ enum class BuiltinId : int {
     StrconvFormatFloat,  // strconv.FormatFloat(f float64, fmt byte, prec, bitSize int) string
     StrconvFormatBool,   // strconv.FormatBool(b bool) string
     StrconvParseBool,    // strconv.ParseBool(s string) (bool, error)
+    // bufio pseudo-package
+    BufioNewScanner,     // bufio.NewScanner(r io.Reader) *bufio.Scanner
+    BufioNewReader,      // bufio.NewReader(r io.Reader) *bufio.Reader
+    // bufio.Scanner methods
+    BufioScannerScan,    // s.Scan() bool
+    BufioScannerText,    // s.Text() string
+    BufioScannerErr,     // s.Err() error
+    // bufio.Reader methods
+    BufioReaderReadString, // r.ReadString(delim byte) (string, error)
+    // os.ReadFile
+    OsReadFile,          // os.ReadFile(name string) ([]byte, error)
     // Sentinel
     Count
 };
@@ -122,6 +133,14 @@ enum class BuiltinId : int {
 /// Get the os.File opaque pointer type (*os.File).
 /// Returns nullptr until init_universe() has been called.
 [[nodiscard]] Type* os_file_ptr_type();
+
+/// Get the bufio.Scanner opaque pointer type (*bufio.Scanner).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* bufio_scanner_ptr_type();
+
+/// Get the bufio.Reader opaque pointer type (*bufio.Reader).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* bufio_reader_ptr_type();
 
 } // namespace sema
 } // namespace golangc
