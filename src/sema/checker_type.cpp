@@ -34,6 +34,18 @@ Type* Checker::resolve_type(ast::TypeExpr* texpr) {
             if (qual.package == "strings" && qual.name == "Builder") {
                 return strings_builder_ptr_type();
             }
+            // sync.Mutex → opaque pointer type registered in universe
+            if (qual.package == "sync" && qual.name == "Mutex") {
+                return sync_mutex_ptr_type();
+            }
+            // sync.WaitGroup → opaque pointer type registered in universe
+            if (qual.package == "sync" && qual.name == "WaitGroup") {
+                return sync_waitgroup_ptr_type();
+            }
+            // os.File → opaque pointer type registered in universe
+            if (qual.package == "os" && qual.name == "File") {
+                return os_file_ptr_type();
+            }
             diag_.error(qual.loc, "qualified types ({}.{}) not yet supported",
                        qual.package, qual.name);
             return nullptr;

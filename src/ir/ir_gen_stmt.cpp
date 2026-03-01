@@ -1022,21 +1022,26 @@ void IRGenerator::gen_local_var_spec(ast::VarSpec& spec) {
                 builder_.create_store(val, alloca);
             }
         } else {
-            // Zero-value init: strings.Builder → call golangc_builder_make()
+            // Zero-value init: opaque types → call their make functions
             if (sym->type) {
                 auto* st = sema::underlying(sym->type);
-                bool is_builder = st &&
+                bool is_opaque_ptr = st &&
                     st->kind == sema::TypeKind::Pointer &&
                     st->pointer.base &&
                     st->pointer.base->kind == sema::TypeKind::Named &&
-                    st->pointer.base->named &&
-                    st->pointer.base->named->name == "strings.Builder";
-                if (is_builder) {
-                    auto* fn = get_or_declare_runtime("golangc_builder_make",
-                                                      type_map_.ptr_type());
-                    auto* ptr = builder_.create_call(fn, {}, type_map_.ptr_type(),
-                                                     "builder.make");
-                    builder_.create_store(ptr, alloca);
+                    st->pointer.base->named;
+                if (is_opaque_ptr) {
+                    std::string_view type_name = st->pointer.base->named->name;
+                    const char* make_fn = nullptr;
+                    if (type_name == "strings.Builder") make_fn = "golangc_builder_make";
+                    else if (type_name == "sync.Mutex")     make_fn = "golangc_mutex_make";
+                    else if (type_name == "sync.WaitGroup") make_fn = "golangc_waitgroup_make";
+                    if (make_fn) {
+                        auto* fn = get_or_declare_runtime(make_fn, type_map_.ptr_type());
+                        auto* ptr = builder_.create_call(fn, {}, type_map_.ptr_type(),
+                                                         std::string(type_name) + ".make");
+                        builder_.create_store(ptr, alloca);
+                    }
                 }
             }
         }

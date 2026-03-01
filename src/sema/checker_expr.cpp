@@ -362,6 +362,46 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
         }
         if (sel == "Fprintf")  { info.symbol = make_member_builtin(BuiltinId::FmtFprintf);  info.type = nullptr; return info; }
         if (sel == "Fprintln") { info.symbol = make_member_builtin(BuiltinId::FmtFprintln); info.type = nullptr; return info; }
+        if (sel == "Scan") {
+            info.symbol = make_member_builtin(BuiltinId::FmtScan);
+            info.type = make_tuple_type({basic_type(BasicKind::Int), error_type()});
+            return info;
+        }
+        if (sel == "Scanln") {
+            info.symbol = make_member_builtin(BuiltinId::FmtScanln);
+            info.type = make_tuple_type({basic_type(BasicKind::Int), error_type()});
+            return info;
+        }
+        if (sel == "Scanf") {
+            info.symbol = make_member_builtin(BuiltinId::FmtScanf);
+            info.type = make_tuple_type({basic_type(BasicKind::Int), error_type()});
+            return info;
+        }
+        if (sel == "Sscan") {
+            info.symbol = make_member_builtin(BuiltinId::FmtSscan);
+            info.type = make_tuple_type({basic_type(BasicKind::Int), error_type()});
+            return info;
+        }
+        if (sel == "Sscanf") {
+            info.symbol = make_member_builtin(BuiltinId::FmtSscanf);
+            info.type = make_tuple_type({basic_type(BasicKind::Int), error_type()});
+            return info;
+        }
+        if (sel == "Sprint") {
+            info.symbol = make_member_builtin(BuiltinId::FmtSprint);
+            info.type = basic_type(BasicKind::String);
+            return info;
+        }
+        if (sel == "Fprint") {
+            info.symbol = make_member_builtin(BuiltinId::FmtFprint);
+            info.type = make_tuple_type({basic_type(BasicKind::Int), error_type()});
+            return info;
+        }
+        if (sel == "Print") {
+            info.symbol = make_member_builtin(BuiltinId::FmtPrintln); // reuse Println codegen, no trailing newline is a minor difference
+            info.type = nullptr;
+            return info;
+        }
     }
 
     if (pkg == "errors") {
@@ -446,6 +486,11 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
             info.type = make_tuple_type({make_slice_type(basic_type(BasicKind::Uint8)), error_type()});
             return info;
         }
+        if (sel == "Getenv") {
+            info.symbol = make_member_builtin(BuiltinId::OsGetenv);
+            info.type = basic_type(BasicKind::String);
+            return info;
+        }
     }
 
     if (pkg == "strings") {
@@ -464,8 +509,11 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
         if (sel == "Replace")   { info.symbol = make_member_builtin(BuiltinId::StringsReplace);   info.type = str_type;  return info; }
         if (sel == "Count")     { info.symbol = make_member_builtin(BuiltinId::StringsCount);     info.type = int_type;  return info; }
         if (sel == "Trim")      { info.symbol = make_member_builtin(BuiltinId::StringsTrim);      info.type = str_type;  return info; }
-        if (sel == "Split")     { info.symbol = make_member_builtin(BuiltinId::StringsSplit);     info.type = str_slice; return info; }
-        if (sel == "Join")      { info.symbol = make_member_builtin(BuiltinId::StringsJoin);      info.type = str_type;  return info; }
+        if (sel == "Split")      { info.symbol = make_member_builtin(BuiltinId::StringsSplit);      info.type = str_slice; return info; }
+        if (sel == "Join")       { info.symbol = make_member_builtin(BuiltinId::StringsJoin);       info.type = str_type;  return info; }
+        if (sel == "Fields")     { info.symbol = make_member_builtin(BuiltinId::StringsFields);     info.type = str_slice; return info; }
+        if (sel == "TrimPrefix") { info.symbol = make_member_builtin(BuiltinId::StringsTrimPrefix); info.type = str_type;  return info; }
+        if (sel == "TrimSuffix") { info.symbol = make_member_builtin(BuiltinId::StringsTrimSuffix); info.type = str_type;  return info; }
     }
 
     if (pkg == "math") {
@@ -483,6 +531,12 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
         if (sel == "Log10") { info.symbol = make_member_builtin(BuiltinId::MathLog10); info.type = f64_type; return info; }
     }
 
+    if (pkg == "sort") {
+        if (sel == "Ints")    { info.symbol = make_member_builtin(BuiltinId::SortInts);    info.type = nullptr; return info; }
+        if (sel == "Strings") { info.symbol = make_member_builtin(BuiltinId::SortStrings); info.type = nullptr; return info; }
+        if (sel == "Slice")   { info.symbol = make_member_builtin(BuiltinId::SortSlice);   info.type = nullptr; return info; }
+    }
+
     if (pkg == "bufio") {
         if (sel == "NewScanner") {
             info.symbol = make_member_builtin(BuiltinId::BufioNewScanner);
@@ -494,6 +548,36 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
             info.type = bufio_reader_ptr_type();
             return info;
         }
+    }
+
+    if (pkg == "time") {
+        auto* i64_ty = basic_type(BasicKind::Int64);
+        if (sel == "Sleep")       { info.symbol = make_member_builtin(BuiltinId::TimeSleep);      info.type = nullptr; return info; }
+        if (sel == "Now")         { info.symbol = make_member_builtin(BuiltinId::TimeNow);        info.type = i64_ty; return info; }
+        if (sel == "Since")       { info.symbol = make_member_builtin(BuiltinId::TimeSince);      info.type = i64_ty; return info; }
+        if (sel == "Hour")        { info.symbol = make_member_builtin(BuiltinId::TimeDurationHour);   info.type = i64_ty; return info; }
+        if (sel == "Minute")      { info.symbol = make_member_builtin(BuiltinId::TimeDurationMinute); info.type = i64_ty; return info; }
+        if (sel == "Second")      { info.symbol = make_member_builtin(BuiltinId::TimeDurationSecond); info.type = i64_ty; return info; }
+        if (sel == "Millisecond") { info.symbol = make_member_builtin(BuiltinId::TimeDurationMs);     info.type = i64_ty; return info; }
+        if (sel == "Duration") {
+            // time.Duration is a named type alias for int64 — return int64 type
+            info.symbol = make_member_builtin(BuiltinId::TimeDurationSecond);
+            info.type = i64_ty;
+            return info;
+        }
+    }
+
+    if (pkg == "rand") {
+        auto* int_ty = basic_type(BasicKind::Int);
+        auto* f64_ty = basic_type(BasicKind::Float64);
+        auto* i64_ty = basic_type(BasicKind::Int64);
+        if (sel == "Intn")      { info.symbol = make_member_builtin(BuiltinId::RandIntn);      info.type = int_ty;  return info; }
+        if (sel == "Float64")   { info.symbol = make_member_builtin(BuiltinId::RandFloat64);   info.type = f64_ty;  return info; }
+        if (sel == "Seed")      { info.symbol = make_member_builtin(BuiltinId::RandSeed);      info.type = nullptr; return info; }
+        if (sel == "New")       { info.symbol = make_member_builtin(BuiltinId::RandNew);       info.type = i64_ty;  return info; }
+        if (sel == "NewSource") { info.symbol = make_member_builtin(BuiltinId::RandNewSource); info.type = i64_ty;  return info; }
+        if (sel == "Int63n")    { info.symbol = make_member_builtin(BuiltinId::RandIntn);      info.type = i64_ty;  return info; }
+        if (sel == "Int31n")    { info.symbol = make_member_builtin(BuiltinId::RandIntn);      info.type = int_ty;  return info; }
     }
 
     diag_.error(expr.loc, "undefined: {}.{}", pkg, sel);
@@ -832,6 +916,25 @@ ExprInfo Checker::check_call(ast::CallExpr& expr) {
             auto arg_info = check_expr(expr.args[0]);
             (void)arg_info;
             info.type = sym->type;
+            return info;
+        }
+    }
+
+    // Check for type conversion where the "function" is a type expression:
+    // e.g. []byte(s), []string(x) — represented as CompositeLit type carrier.
+    // The type carrier has a TypeExpr but no lbrace (filename is empty) and no elements.
+    if (expr.func && expr.func->kind == ast::ExprKind::CompositeLit &&
+        expr.func->composite_lit.type != nullptr &&
+        expr.func->composite_lit.elts.count == 0 &&
+        expr.func->composite_lit.lbrace.filename.empty()) {
+        // This is a type conversion []T(x) or [N]T(x)
+        Type* conv_type = resolve_type(expr.func->composite_lit.type);
+        if (conv_type) {
+            if (expr.args.count == 1) {
+                auto arg_info = check_expr(expr.args[0]);
+                (void)arg_info;
+            }
+            info.type = conv_type;
             return info;
         }
     }

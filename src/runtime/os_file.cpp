@@ -65,4 +65,35 @@ int64_t golangc_os_file_write_string(golangc_file* f, const char* ptr, int64_t l
     return static_cast<int64_t>(fwrite(ptr, 1, static_cast<size_t>(len), f->f));
 }
 
+void golangc_os_getenv(char* sret_out, const char* key_ptr, int64_t key_len) {
+    char key_buf[1024];
+    int64_t n = key_len < 1023 ? key_len : 1023;
+    memcpy(key_buf, key_ptr, static_cast<size_t>(n));
+    key_buf[n] = '\0';
+
+    const char* val = nullptr;
+    size_t sz = 0;
+#ifdef _MSC_VER
+    char env_buf[4096];
+    size_t env_sz = 0;
+    if (getenv_s(&env_sz, env_buf, sizeof(env_buf), key_buf) == 0 && env_sz > 1) {
+        val = env_buf;
+        sz = env_sz - 1; // env_sz includes null terminator
+    }
+#else
+    val = getenv(key_buf);
+    sz = val ? strlen(val) : 0;
+#endif
+
+    if (!val || sz == 0) {
+        *reinterpret_cast<const char**>(sret_out) = nullptr;
+        *reinterpret_cast<int64_t*>(sret_out + 8) = 0;
+        return;
+    }
+    char* buf = static_cast<char*>(malloc(sz + 1));
+    if (buf) { memcpy(buf, val, sz + 1); }
+    *reinterpret_cast<char**>(sret_out) = buf;
+    *reinterpret_cast<int64_t*>(sret_out + 8) = static_cast<int64_t>(sz);
+}
+
 } // extern "C"

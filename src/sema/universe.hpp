@@ -93,6 +93,22 @@ enum class BuiltinId : int {
     StrconvFormatFloat,  // strconv.FormatFloat(f float64, fmt byte, prec, bitSize int) string
     StrconvFormatBool,   // strconv.FormatBool(b bool) string
     StrconvParseBool,    // strconv.ParseBool(s string) (bool, error)
+    // fmt.Scan family
+    FmtScan,             // fmt.Scan(a ...interface{}) (int, error)
+    FmtScanln,           // fmt.Scanln(a ...interface{}) (int, error)
+    FmtScanf,            // fmt.Scanf(format string, a ...interface{}) (int, error)
+    FmtSscan,            // fmt.Sscan(str string, a ...interface{}) (int, error)
+    FmtSscanf,           // fmt.Sscanf(str, format string, a ...interface{}) (int, error)
+    // sort pseudo-package
+    SortInts,            // sort.Ints(a []int)
+    SortStrings,         // sort.Strings(a []string)
+    SortSlice,           // sort.Slice(slice interface{}, less func(i, j int) bool)
+    // os.Getenv
+    OsGetenv,            // os.Getenv(key string) string
+    // strings extras
+    StringsFields,       // strings.Fields(s string) []string
+    StringsTrimPrefix,   // strings.TrimPrefix(s, prefix string) string
+    StringsTrimSuffix,   // strings.TrimSuffix(s, suffix string) string
     // bufio pseudo-package
     BufioNewScanner,     // bufio.NewScanner(r io.Reader) *bufio.Scanner
     BufioNewReader,      // bufio.NewReader(r io.Reader) *bufio.Reader
@@ -104,6 +120,24 @@ enum class BuiltinId : int {
     BufioReaderReadString, // r.ReadString(delim byte) (string, error)
     // os.ReadFile
     OsReadFile,          // os.ReadFile(name string) ([]byte, error)
+    // fmt.Sprint
+    FmtSprint,           // fmt.Sprint(a ...interface{}) string
+    FmtFprint,           // fmt.Fprint(w io.Writer, a ...interface{}) (int, error)
+    // time pseudo-package
+    TimeSleep,           // time.Sleep(d time.Duration)
+    TimeNow,             // time.Now() time.Time
+    TimeSince,           // time.Since(t time.Time) time.Duration
+    // time.Duration type (namedtype sentinel — not called, used as constant multiplier)
+    TimeDurationHour,    // time.Hour constant
+    TimeDurationMinute,  // time.Minute constant
+    TimeDurationSecond,  // time.Second constant
+    TimeDurationMs,      // time.Millisecond constant
+    // math/rand pseudo-package
+    RandIntn,            // rand.Intn(n int) int
+    RandFloat64,         // rand.Float64() float64
+    RandSeed,            // rand.Seed(seed int64)
+    RandNew,             // rand.New(src rand.Source) *rand.Rand (simplified)
+    RandNewSource,       // rand.NewSource(seed int64) rand.Source
     // Sentinel
     Count
 };

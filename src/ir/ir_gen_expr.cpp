@@ -360,6 +360,24 @@ Value* IRGenerator::gen_call(ast::Expr* expr) {
         return gen_builtin_call(expr, &builtin_info);
     }
 
+    // Type conversion via type-expression carrier: []byte(s), []string(x), etc.
+    // The parser represents these as CompositeLit with a TypeExpr but no elements.
+    if (call.func && call.func->kind == ast::ExprKind::CompositeLit &&
+        call.func->composite_lit.type != nullptr &&
+        call.func->composite_lit.elts.count == 0 &&
+        call.func->composite_lit.lbrace.filename.empty()) {
+        auto* call_info = expr_info(expr);
+        IRType* target_ir = call_info ? map_sema_type(call_info->type) : nullptr;
+        if (!target_ir) target_ir = type_map_.slice_type();
+        if (call.args.count == 1) {
+            auto* val = gen_expr(call.args[0]);
+            if (!val) return builder_.create_const_nil(target_ir, "conv.nil");
+            if (val->type == target_ir) return val;
+            return builder_.create_bitcast(val, target_ir, "typeconv");
+        }
+        return builder_.create_const_nil(target_ir, "conv.nil");
+    }
+
     if (func_sym && func_sym->kind == sema::SymbolKind::Type) {
         if (call.args.count == 1) {
             auto* val = gen_expr(call.args[0]);
@@ -1333,6 +1351,18 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
         return builder_.create_const_nil(type_map_.ptr_type(), "create.nil");
     }
 
+    // ---- os.Getenv(key string) string ----
+    if (builtin_name == "os.Getenv") {
+        if (call.args.count >= 1) {
+            auto* key = gen_expr(call.args[0]);
+            if (key) {
+                auto* fn = get_or_declare_runtime("golangc_os_getenv", type_map_.string_type());
+                return builder_.create_call(fn, {key}, type_map_.string_type(), "os.Getenv");
+            }
+        }
+        return builder_.create_const_string("", "getenv.empty");
+    }
+
     // ---- bufio.NewScanner(r) → *bufio.Scanner ----
     if (builtin_name == "bufio.NewScanner") {
         if (call.args.count >= 1) {
@@ -1355,6 +1385,51 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
             }
         }
         return builder_.create_const_nil(type_map_.ptr_type(), "breader.nil");
+    }
+
+    // ---- sort.Ints(a []int) ----
+    if (builtin_name == "sort.Ints") {
+        if (call.args.count >= 1) {
+            auto* slice = gen_expr(call.args[0]);
+            if (slice) {
+                auto* data_ptr = builder_.create_extract_value(slice, 0, type_map_.ptr_type(), "sort.ptr");
+                auto* data_len = builder_.create_slice_len(slice, "sort.len");
+                auto* fn = get_or_declare_runtime("golangc_sort_ints", type_map_.void_type());
+                return builder_.create_call(fn, {data_ptr, data_len}, type_map_.void_type(), "sort.Ints");
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "sort.ints.nop");
+    }
+
+    // ---- sort.Strings(a []string) ----
+    if (builtin_name == "sort.Strings") {
+        if (call.args.count >= 1) {
+            auto* slice = gen_expr(call.args[0]);
+            if (slice) {
+                auto* data_ptr = builder_.create_extract_value(slice, 0, type_map_.ptr_type(), "sort.ptr");
+                auto* data_len = builder_.create_slice_len(slice, "sort.len");
+                auto* fn = get_or_declare_runtime("golangc_sort_strings", type_map_.void_type());
+                return builder_.create_call(fn, {data_ptr, data_len}, type_map_.void_type(), "sort.Strings");
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "sort.strings.nop");
+    }
+
+    // ---- sort.Slice(slice, less func(i,j int) bool) ----
+    if (builtin_name == "sort.Slice") {
+        if (call.args.count >= 2) {
+            auto* slice    = gen_expr(call.args[0]);
+            auto* less_fn  = gen_expr(call.args[1]);
+            if (slice && less_fn) {
+                auto* data_ptr  = builder_.create_extract_value(slice, 0, type_map_.ptr_type(), "sort.ptr");
+                auto* data_len  = builder_.create_slice_len(slice, "sort.len");
+                auto* elem_size = builder_.create_const_int(type_map_.i64_type(), 8, "elem.sz");
+                auto* fn = get_or_declare_runtime("golangc_sort_slice", type_map_.void_type());
+                return builder_.create_call(fn, {data_ptr, data_len, less_fn, elem_size},
+                                            type_map_.void_type(), "sort.Slice");
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "sort.slice.nop");
     }
 
     // ---- fmt.Fprintf(w, format, args...) ----
@@ -1485,16 +1560,176 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
         return builder_.create_const_string("", "replace.empty");
     }
 
-    // strings.Split / strings.Join — limited: return/take []string but we have no slice-of-string runtime yet
-    // Emit a no-op placeholder that at least compiles
+    // ---- strings.Split(s, sep) → []string ----
     if (builtin_name == "strings.Split") {
-        // Just return an empty slice for now (compilation support)
-        auto* fn = get_or_declare_runtime("golangc_strings_split_nop", type_map_.slice_type());
-        (void)fn;
-        return builder_.create_const_nil(type_map_.slice_type(), "split.nop");
+        if (call.args.count >= 2) {
+            auto* s   = gen_expr(call.args[0]);
+            auto* sep = gen_expr(call.args[1]);
+            if (s && sep) {
+                auto* fn = get_or_declare_runtime("golangc_strings_split", type_map_.slice_type());
+                return builder_.create_call(fn, {s, sep}, type_map_.slice_type(), "strings.Split");
+            }
+        }
+        return builder_.create_const_nil(type_map_.slice_type(), "split.nil");
     }
+
+    // ---- strings.Join(elems []string, sep string) → string ----
     if (builtin_name == "strings.Join") {
-        return builder_.create_const_string("", "join.nop");
+        if (call.args.count >= 2) {
+            auto* elems = gen_expr(call.args[0]);
+            auto* sep   = gen_expr(call.args[1]);
+            if (elems && sep) {
+                auto* fn = get_or_declare_runtime("golangc_strings_join", type_map_.string_type());
+                return builder_.create_call(fn, {elems, sep}, type_map_.string_type(), "strings.Join");
+            }
+        }
+        return builder_.create_const_string("", "join.empty");
+    }
+
+    // ---- strings.Fields(s) → []string ----
+    if (builtin_name == "strings.Fields") {
+        if (call.args.count >= 1) {
+            auto* s = gen_expr(call.args[0]);
+            if (s) {
+                auto* fn = get_or_declare_runtime("golangc_strings_fields", type_map_.slice_type());
+                return builder_.create_call(fn, {s}, type_map_.slice_type(), "strings.Fields");
+            }
+        }
+        return builder_.create_const_nil(type_map_.slice_type(), "fields.nil");
+    }
+
+    // ---- strings.TrimPrefix / strings.TrimSuffix ----
+    if (builtin_name == "strings.TrimPrefix" || builtin_name == "strings.TrimSuffix") {
+        if (call.args.count >= 2) {
+            auto* s   = gen_expr(call.args[0]);
+            auto* fix = gen_expr(call.args[1]);
+            if (s && fix) {
+                std::string fn_name = (builtin_name == "strings.TrimPrefix")
+                                    ? "golangc_strings_trim_prefix"
+                                    : "golangc_strings_trim_suffix";
+                auto* fn = get_or_declare_runtime(fn_name, type_map_.string_type());
+                return builder_.create_call(fn, {s, fix}, type_map_.string_type(),
+                                            std::string(builtin_name));
+            }
+        }
+        return builder_.create_const_string("", std::string(builtin_name) + ".empty");
+    }
+
+    // ---- fmt.Sprint(args...) → string ----
+    if (builtin_name == "fmt.Sprint") {
+        // Concatenate args using golangc_fmt_sprintf with auto format string
+        // Build a format string like "%v %v %v" (space-separated)
+        std::string fmt_str;
+        std::vector<Value*> fmt_args;
+        for (uint32_t i = 0; i < call.args.count; ++i) {
+            auto* a = gen_expr(call.args[i]);
+            if (!a) continue;
+            if (i > 0) fmt_str += " ";
+            if (a->type == type_map_.string_type())  fmt_str += "%s";
+            else if (a->type && a->type->is_float())  fmt_str += "%g";
+            else                                      fmt_str += "%v";
+            fmt_args.push_back(a);
+        }
+        auto* fmt_val = builder_.create_const_string(fmt_str, "sprint.fmt");
+        fmt_args.insert(fmt_args.begin(), fmt_val);
+        auto* fn = get_or_declare_runtime("golangc_sprintf", type_map_.string_type());
+        return builder_.create_call(fn, fmt_args, type_map_.string_type(), "fmt.Sprint");
+    }
+
+    // ---- fmt.Fprint(w, args...) ----
+    if (builtin_name == "fmt.Fprint") {
+        if (call.args.count >= 1) {
+            auto* w = gen_expr(call.args[0]);
+            if (w) {
+                std::string fmt_str;
+                std::vector<Value*> fargs = {w};
+                for (uint32_t i = 1; i < call.args.count; ++i) {
+                    auto* a = gen_expr(call.args[i]);
+                    if (!a) continue;
+                    if (i > 1) fmt_str += " ";
+                    if (a->type == type_map_.string_type())  fmt_str += "%s";
+                    else if (a->type && a->type->is_float())  fmt_str += "%g";
+                    else                                      fmt_str += "%v";
+                    fargs.push_back(a);
+                }
+                auto* fmt_val = builder_.create_const_string(fmt_str, "fprint.fmt");
+                fargs.insert(fargs.begin() + 1, fmt_val);
+                auto* fn = get_or_declare_runtime("golangc_fprintf", type_map_.void_type());
+                return builder_.create_call(fn, fargs, type_map_.void_type(), "fmt.Fprint");
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "fprint.nop");
+    }
+
+    // ---- time package ----
+    if (builtin_name == "time.Sleep") {
+        if (call.args.count >= 1) {
+            auto* dur = gen_expr(call.args[0]);
+            if (dur) {
+                auto* fn = get_or_declare_runtime("golangc_time_sleep", type_map_.void_type());
+                return builder_.create_call(fn, {dur}, type_map_.void_type(), "time.Sleep");
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "sleep.nop");
+    }
+
+    if (builtin_name == "time.Now") {
+        auto* fn = get_or_declare_runtime("golangc_time_now", type_map_.i64_type());
+        return builder_.create_call(fn, {}, type_map_.i64_type(), "time.Now");
+    }
+
+    if (builtin_name == "time.Since") {
+        if (call.args.count >= 1) {
+            auto* t = gen_expr(call.args[0]);
+            if (t) {
+                auto* fn = get_or_declare_runtime("golangc_time_since", type_map_.i64_type());
+                return builder_.create_call(fn, {t}, type_map_.i64_type(), "time.Since");
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "since.zero");
+    }
+
+    // time duration constants — just return the nanosecond value as i64
+    if (builtin_name == "time.Hour")        return builder_.create_const_int(type_map_.i64_type(), 3600000000000LL, "time.Hour");
+    if (builtin_name == "time.Minute")      return builder_.create_const_int(type_map_.i64_type(), 60000000000LL,   "time.Minute");
+    if (builtin_name == "time.Second")      return builder_.create_const_int(type_map_.i64_type(), 1000000000LL,    "time.Second");
+    if (builtin_name == "time.Millisecond") return builder_.create_const_int(type_map_.i64_type(), 1000000LL,       "time.Ms");
+
+    // ---- math/rand package ----
+    if (builtin_name == "rand.Intn" || builtin_name == "rand.Int63n" || builtin_name == "rand.Int31n") {
+        if (call.args.count >= 1) {
+            auto* n = gen_expr(call.args[0]);
+            if (n) {
+                auto* fn = get_or_declare_runtime("golangc_rand_intn", type_map_.i64_type());
+                return builder_.create_call(fn, {n}, type_map_.i64_type(), "rand.Intn");
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "rand.zero");
+    }
+
+    if (builtin_name == "rand.Float64") {
+        auto* fn = get_or_declare_runtime("golangc_rand_float64", type_map_.f64_type());
+        return builder_.create_call(fn, {}, type_map_.f64_type(), "rand.Float64");
+    }
+
+    if (builtin_name == "rand.Seed") {
+        if (call.args.count >= 1) {
+            auto* seed = gen_expr(call.args[0]);
+            if (seed) {
+                auto* fn = get_or_declare_runtime("golangc_rand_seed", type_map_.void_type());
+                return builder_.create_call(fn, {seed}, type_map_.void_type(), "rand.Seed");
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "seed.nop");
+    }
+
+    if (builtin_name == "rand.New" || builtin_name == "rand.NewSource") {
+        // Simplified: NewSource returns seed as i64; New just returns its arg
+        if (call.args.count >= 1) {
+            auto* a = gen_expr(call.args[0]);
+            if (a) return a;
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "rand.new.zero");
     }
 
     // ---- math package ----
@@ -1821,6 +2056,97 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
             return packed;
         }
         return builder_.create_const_int(type_map_.i64_type(), 0, "breader.unknown");
+    }
+
+    // ---- fmt.Scan / fmt.Scanln / fmt.Scanf ----
+    if (builtin_name == "fmt.Scan" || builtin_name == "fmt.Scanln" ||
+        builtin_name == "fmt.Scanf") {
+        bool is_scanf = (builtin_name == "fmt.Scanf");
+        uint32_t first_ptr_arg = is_scanf ? 1 : 0;
+        std::string rt_name = is_scanf ? "golangc_fmt_scanf"
+                            : (builtin_name == "fmt.Scanln") ? "golangc_fmt_scanln"
+                                                              : "golangc_fmt_scan";
+        std::vector<Value*> args;
+        if (is_scanf && call.args.count >= 1) {
+            auto* fmt_val = gen_expr(call.args[0]);
+            if (fmt_val) args.push_back(fmt_val);
+        }
+        int64_t nargs = static_cast<int64_t>(call.args.count) - static_cast<int64_t>(first_ptr_arg);
+        if (nargs < 0) nargs = 0;
+        args.push_back(builder_.create_const_int(type_map_.i64_type(), nargs, "scan.nargs"));
+        for (uint32_t i = first_ptr_arg; i < call.args.count; ++i) {
+            int64_t tag = 0; // 0=int64, 1=float64, 2=string
+            auto* ai = expr_info(call.args[i]);
+            if (ai && ai->type) {
+                auto* pt = sema::underlying(ai->type);
+                if (pt && pt->kind == sema::TypeKind::Pointer && pt->pointer.base) {
+                    auto* base = sema::underlying(pt->pointer.base);
+                    if (base && base->kind == sema::TypeKind::Basic) {
+                        if (base->basic == sema::BasicKind::Float32 ||
+                            base->basic == sema::BasicKind::Float64)  tag = 1;
+                        else if (sema::is_string(pt->pointer.base))   tag = 2;
+                    }
+                }
+            }
+            args.push_back(builder_.create_const_int(type_map_.i64_type(), tag, "scan.tag"));
+            auto* ptr = gen_expr(call.args[i]);
+            if (ptr) args.push_back(ptr);
+        }
+        auto* fn = get_or_declare_runtime(rt_name, type_map_.i64_type());
+        auto* n = builder_.create_call(fn, args, type_map_.i64_type(), std::string(builtin_name));
+        auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+        std::vector<IRType*> fields = {type_map_.i64_type(), type_map_.interface_type()};
+        auto* packed = builder_.create_const_nil(type_map_.make_tuple_type(std::move(fields)), "scan.pack");
+        packed = builder_.create_insert_value(packed, n, 0, "scan.pack");
+        packed = builder_.create_insert_value(packed, nil_err, 1, "scan.pack");
+        return packed;
+    }
+
+    // ---- fmt.Sscan / fmt.Sscanf ----
+    if (builtin_name == "fmt.Sscan" || builtin_name == "fmt.Sscanf") {
+        bool is_sscanf = (builtin_name == "fmt.Sscanf");
+        uint32_t first_ptr_arg = is_sscanf ? 2 : 1;
+        std::string rt_name = is_sscanf ? "golangc_fmt_sscanf" : "golangc_fmt_sscan";
+        std::vector<Value*> args;
+        // Input string (first arg always)
+        if (call.args.count >= 1) {
+            auto* str = gen_expr(call.args[0]);
+            if (str) args.push_back(str);
+        }
+        // Format string (second arg for Sscanf)
+        if (is_sscanf && call.args.count >= 2) {
+            auto* fmt_val = gen_expr(call.args[1]);
+            if (fmt_val) args.push_back(fmt_val);
+        }
+        int64_t nargs = static_cast<int64_t>(call.args.count) - static_cast<int64_t>(first_ptr_arg);
+        if (nargs < 0) nargs = 0;
+        args.push_back(builder_.create_const_int(type_map_.i64_type(), nargs, "sscan.nargs"));
+        for (uint32_t i = first_ptr_arg; i < call.args.count; ++i) {
+            int64_t tag = 0; // 0=int64, 1=float64, 2=string
+            auto* ai = expr_info(call.args[i]);
+            if (ai && ai->type) {
+                auto* pt = sema::underlying(ai->type);
+                if (pt && pt->kind == sema::TypeKind::Pointer && pt->pointer.base) {
+                    auto* base = sema::underlying(pt->pointer.base);
+                    if (base && base->kind == sema::TypeKind::Basic) {
+                        if (base->basic == sema::BasicKind::Float32 ||
+                            base->basic == sema::BasicKind::Float64)    tag = 1;
+                        else if (sema::is_string(pt->pointer.base))     tag = 2;
+                    }
+                }
+            }
+            args.push_back(builder_.create_const_int(type_map_.i64_type(), tag, "sscan.tag"));
+            auto* ptr = gen_expr(call.args[i]);
+            if (ptr) args.push_back(ptr);
+        }
+        auto* fn = get_or_declare_runtime(rt_name, type_map_.i64_type());
+        auto* n = builder_.create_call(fn, args, type_map_.i64_type(), std::string(builtin_name));
+        auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+        std::vector<IRType*> fields = {type_map_.i64_type(), type_map_.interface_type()};
+        auto* packed = builder_.create_const_nil(type_map_.make_tuple_type(std::move(fields)), "sscan.pack");
+        packed = builder_.create_insert_value(packed, n, 0, "sscan.pack");
+        packed = builder_.create_insert_value(packed, nil_err, 1, "sscan.pack");
+        return packed;
     }
 
     // ---- errors.New(msg) → golangc_errors_new(ptr, len) returns interface via sret ----

@@ -506,6 +506,17 @@ void golangc_printf(const char* fmt_ptr, int64_t fmt_len, ...) {
     fwrite(buf, 1, static_cast<size_t>(len), stdout);
 }
 
+// golangc_fprintf: format to an arbitrary file handle.
+void golangc_fprintf(golangc_file* f, const char* fmt_ptr, int64_t fmt_len, ...) {
+    if (!f || !f->f) return;
+    char buf[4096];
+    va_list ap;
+    va_start(ap, fmt_len);
+    int len = fmt_custom(buf, sizeof(buf), fmt_ptr, fmt_len, ap);
+    va_end(ap);
+    fwrite(buf, 1, static_cast<size_t>(len), f->f);
+}
+
 // ============================================================================
 // Rune / character conversion
 // ============================================================================
@@ -726,6 +737,149 @@ void golangc_strings_replace(char* sret_out,
     memcpy(sret_out + 8, &out_len, sizeof(int64_t));
 }
 
+// ---- strings.TrimPrefix ----
+void golangc_strings_trim_prefix(char* sret_out,
+                                   const char* s_ptr,   int64_t s_len,
+                                   const char* pre_ptr, int64_t pre_len) {
+    if (pre_len > 0 && s_len >= pre_len &&
+        memcmp(s_ptr, pre_ptr, static_cast<size_t>(pre_len)) == 0) {
+        sret_string(sret_out, s_ptr + pre_len, s_len - pre_len);
+    } else {
+        sret_string(sret_out, s_ptr, s_len);
+    }
+}
+
+// ---- strings.TrimSuffix ----
+void golangc_strings_trim_suffix(char* sret_out,
+                                   const char* s_ptr,   int64_t s_len,
+                                   const char* suf_ptr, int64_t suf_len) {
+    if (suf_len > 0 && s_len >= suf_len &&
+        memcmp(s_ptr + s_len - suf_len, suf_ptr, static_cast<size_t>(suf_len)) == 0) {
+        sret_string(sret_out, s_ptr, s_len - suf_len);
+    } else {
+        sret_string(sret_out, s_ptr, s_len);
+    }
+}
+
+// ---- strings.Fields ----
+void golangc_strings_fields(char* sret_out, const char* s_ptr, int64_t s_len) {
+    struct GoStr { const char* ptr; int64_t len; };
+    struct GoSlice { void* ptr; int64_t len; int64_t cap; };
+
+    // Count words
+    int64_t count = 0;
+    bool in_word = false;
+    for (int64_t i = 0; i < s_len; ++i) {
+        unsigned char c = static_cast<unsigned char>(s_ptr[i]);
+        bool ws = (c == ' ' || c == '\t' || c == '\n' || c == '\r');
+        if (!ws && !in_word) { ++count; in_word = true; }
+        else if (ws)           { in_word = false; }
+    }
+
+    auto* arr = static_cast<GoStr*>(malloc(static_cast<size_t>(count) * sizeof(GoStr)));
+    int64_t idx = 0, start = 0;
+    in_word = false;
+    for (int64_t i = 0; i <= s_len; ++i) {
+        bool ws = (i == s_len);
+        if (!ws) {
+            unsigned char c = static_cast<unsigned char>(s_ptr[i]);
+            ws = (c == ' ' || c == '\t' || c == '\n' || c == '\r');
+        }
+        if (!ws && !in_word) { start = i; in_word = true; }
+        else if (ws && in_word) {
+            int64_t wlen = i - start;
+            char* buf = static_cast<char*>(malloc(static_cast<size_t>(wlen) + 1));
+            if (buf) { memcpy(buf, s_ptr + start, static_cast<size_t>(wlen)); buf[wlen] = '\0'; }
+            arr[idx++] = {buf, wlen};
+            in_word = false;
+        }
+    }
+
+    auto* out = reinterpret_cast<GoSlice*>(sret_out);
+    out->ptr = arr; out->len = count; out->cap = count;
+}
+
+// ---- strings.Split ----
+void golangc_strings_split(char* sret_out,
+                            const char* s_ptr,   int64_t s_len,
+                            const char* sep_ptr, int64_t sep_len) {
+    struct GoStr  { const char* ptr; int64_t len; };
+    struct GoSlice{ void* ptr; int64_t len; int64_t cap; };
+
+    // Empty separator: split into individual bytes
+    if (sep_len == 0) {
+        auto* arr = static_cast<GoStr*>(malloc(static_cast<size_t>(s_len) * sizeof(GoStr)));
+        for (int64_t i = 0; i < s_len; ++i) {
+            char* c = static_cast<char*>(malloc(2));
+            if (c) { c[0] = s_ptr[i]; c[1] = '\0'; }
+            arr[i] = {c, 1};
+        }
+        auto* out = reinterpret_cast<GoSlice*>(sret_out);
+        out->ptr = arr; out->len = s_len; out->cap = s_len;
+        return;
+    }
+
+    // Count segments
+    int64_t count = 1;
+    for (int64_t i = 0; i <= s_len - sep_len; ) {
+        if (memcmp(s_ptr + i, sep_ptr, static_cast<size_t>(sep_len)) == 0) {
+            ++count; i += sep_len;
+        } else { ++i; }
+    }
+
+    auto* arr = static_cast<GoStr*>(malloc(static_cast<size_t>(count) * sizeof(GoStr)));
+    int64_t idx = 0, start = 0;
+    for (int64_t i = 0; i <= s_len - sep_len; ) {
+        if (memcmp(s_ptr + i, sep_ptr, static_cast<size_t>(sep_len)) == 0) {
+            int64_t wlen = i - start;
+            char* buf = static_cast<char*>(malloc(static_cast<size_t>(wlen) + 1));
+            if (buf) { memcpy(buf, s_ptr + start, static_cast<size_t>(wlen)); buf[wlen] = '\0'; }
+            arr[idx++] = {buf, wlen};
+            start = i + sep_len; i += sep_len;
+        } else { ++i; }
+    }
+    // Last segment
+    {
+        int64_t wlen = s_len - start;
+        char* buf = static_cast<char*>(malloc(static_cast<size_t>(wlen) + 1));
+        if (buf) { memcpy(buf, s_ptr + start, static_cast<size_t>(wlen)); buf[wlen] = '\0'; }
+        arr[idx] = {buf, wlen};
+    }
+
+    auto* out = reinterpret_cast<GoSlice*>(sret_out);
+    out->ptr = arr; out->len = count; out->cap = count;
+}
+
+// ---- strings.Join ----
+void golangc_strings_join(char* sret_out,
+                           void* elems_ptr, int64_t elems_len,
+                           const char* sep_ptr, int64_t sep_len) {
+    struct GoStr { const char* ptr; int64_t len; };
+    auto* elems = static_cast<GoStr*>(elems_ptr);
+    if (!elems || elems_len == 0) { sret_string(sret_out, "", 0); return; }
+
+    // Compute total length
+    int64_t total = 0;
+    for (int64_t i = 0; i < elems_len; ++i) total += elems[i].len;
+    total += sep_len * (elems_len - 1);
+
+    char* buf = static_cast<char*>(malloc(static_cast<size_t>(total) + 1));
+    if (!buf) { sret_string(sret_out, "", 0); return; }
+    char* p = buf;
+    for (int64_t i = 0; i < elems_len; ++i) {
+        if (i > 0 && sep_len > 0 && sep_ptr) {
+            memcpy(p, sep_ptr, static_cast<size_t>(sep_len)); p += sep_len;
+        }
+        if (elems[i].ptr && elems[i].len > 0) {
+            memcpy(p, elems[i].ptr, static_cast<size_t>(elems[i].len));
+            p += elems[i].len;
+        }
+    }
+    *p = '\0';
+    *reinterpret_cast<char**>(sret_out) = buf;
+    *reinterpret_cast<int64_t*>(sret_out + 8) = total;
+}
+
 // ============================================================================
 // math package
 // ============================================================================
@@ -882,6 +1036,74 @@ void golangc_fmt_errorf(char* sret_out, const char* fmt_ptr, int64_t fmt_len, ..
     int64_t tag = 1;
     std::memcpy(sret_out,     &tag, sizeof(int64_t));
     std::memcpy(sret_out + 8, &s,   sizeof(void*));
+}
+
+// ============================================================================
+// time package
+// ============================================================================
+
+#ifdef _WIN32
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#else
+#  include <time.h>
+#  include <unistd.h>
+#endif
+
+void golangc_time_sleep(int64_t nanoseconds) {
+    if (nanoseconds <= 0) return;
+#ifdef _WIN32
+    DWORD ms = static_cast<DWORD>(nanoseconds / 1000000LL);
+    if (ms == 0 && nanoseconds > 0) ms = 1;
+    Sleep(ms);
+#else
+    struct timespec ts;
+    ts.tv_sec  = nanoseconds / 1000000000LL;
+    ts.tv_nsec = nanoseconds % 1000000000LL;
+    nanosleep(&ts, nullptr);
+#endif
+}
+
+int64_t golangc_time_now(void) {
+#ifdef _WIN32
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    // FILETIME is 100-nanosecond intervals since 1601-01-01
+    // Convert to nanoseconds since Unix epoch (1970-01-01)
+    int64_t t = (static_cast<int64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+    // 11644473600 seconds between 1601 and 1970 epochs
+    t -= 116444736000000000LL; // in 100-ns units
+    return t * 100; // convert to nanoseconds
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return static_cast<int64_t>(ts.tv_sec) * 1000000000LL + ts.tv_nsec;
+#endif
+}
+
+int64_t golangc_time_since(int64_t start_ns) {
+    return golangc_time_now() - start_ns;
+}
+
+// ============================================================================
+// math/rand package
+// ============================================================================
+
+#include <cstdlib>
+
+void golangc_rand_seed(int64_t seed) {
+    srand(static_cast<unsigned int>(seed));
+}
+
+int64_t golangc_rand_intn(int64_t n) {
+    if (n <= 0) return 0;
+    return static_cast<int64_t>(rand()) % n;
+}
+
+double golangc_rand_float64(void) {
+    return static_cast<double>(rand()) / (static_cast<double>(RAND_MAX) + 1.0);
 }
 
 } // extern "C"

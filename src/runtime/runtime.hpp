@@ -337,6 +337,59 @@ int64_t golangc_parse_bool(const char* ptr, int64_t len);
 /// strconv.FormatBool: bool to "true"/"false" via sret (16-byte {ptr,len}).
 void golangc_format_bool(char* sret_out, int64_t value);
 
+// ---- fmt.Scan* ----
+
+/// fmt.Scan: read n items from stdin. Each item is (int64_t tag, void* ptr).
+/// tag: 0=*int64, 1=*double, 2=*GoString (16-byte {ptr,len} header).
+int64_t golangc_fmt_scan  (int64_t n, ...);
+/// fmt.Scanln: same as Scan but stops at newline.
+int64_t golangc_fmt_scanln(int64_t n, ...);
+/// fmt.Scanf: format string (ptr+len) first, then n, then (tag,ptr) pairs.
+int64_t golangc_fmt_scanf (const char* fmt_ptr, int64_t fmt_len, int64_t n, ...);
+/// fmt.Sscan: parse from string, n (tag,ptr) pairs.
+int64_t golangc_fmt_sscan (const char* str_ptr, int64_t str_len, int64_t n, ...);
+/// fmt.Sscanf: format-directed parse from string.
+int64_t golangc_fmt_sscanf(const char* str_ptr, int64_t str_len,
+                            const char* fmt_ptr, int64_t fmt_len, int64_t n, ...);
+
+// ---- sort package ----
+
+/// sort.Ints: in-place sort of int64 elements.
+void golangc_sort_ints   (void* ptr, int64_t len);
+/// sort.Strings: in-place sort of GoString (16-byte) elements.
+void golangc_sort_strings(void* ptr, int64_t len);
+/// sort.Slice: sort using callback. less_fn(i,j) returns 1 if elem[i] < elem[j].
+void golangc_sort_slice  (void* ptr, int64_t len, void* less_fn, int64_t elem_size);
+
+// ---- os.Getenv ----
+/// os.Getenv: returns environment variable as string via sret (16-byte {ptr,len}).
+void golangc_os_getenv(char* sret_out, const char* key_ptr, int64_t key_len);
+
+// ---- strings extras ----
+
+/// strings.Fields: split by whitespace, returns []string via sret (24-byte slice header).
+void golangc_strings_fields(char* sret_out, const char* s_ptr, int64_t s_len);
+
+/// strings.TrimPrefix: remove prefix if present, returns string via sret.
+void golangc_strings_trim_prefix(char* sret_out,
+                                  const char* s_ptr,   int64_t s_len,
+                                  const char* pre_ptr, int64_t pre_len);
+
+/// strings.TrimSuffix: remove suffix if present, returns string via sret.
+void golangc_strings_trim_suffix(char* sret_out,
+                                  const char* s_ptr,   int64_t s_len,
+                                  const char* suf_ptr, int64_t suf_len);
+
+/// strings.Split: split s by sep, returns []string via sret (24-byte slice header).
+void golangc_strings_split(char* sret_out,
+                            const char* s_ptr,   int64_t s_len,
+                            const char* sep_ptr, int64_t sep_len);
+
+/// strings.Join: join []string elements with sep, returns string via sret.
+void golangc_strings_join(char* sret_out,
+                           void* elems_ptr, int64_t elems_len,
+                           const char* sep_ptr, int64_t sep_len);
+
 // ---- bufio package ----
 
 struct golangc_scanner;
@@ -357,6 +410,22 @@ void golangc_breader_read_string(char* sret_out, golangc_breader* r, int64_t del
 // ---- os.ReadFile ----
 /// Read entire file into a slice (heap-allocated). Returns {ptr, len, cap} via sret.
 void golangc_os_read_file(char* sret_out, const char* path_ptr, int64_t path_len);
+
+// ---- time package ----
+/// Sleep for the given nanoseconds.
+void golangc_time_sleep(int64_t nanoseconds);
+/// Return current time as nanoseconds since Unix epoch.
+int64_t golangc_time_now(void);
+/// Return nanoseconds elapsed since the given timestamp.
+int64_t golangc_time_since(int64_t start_ns);
+
+// ---- math/rand package ----
+/// Seed the random number generator.
+void golangc_rand_seed(int64_t seed);
+/// Return a pseudo-random int64 in [0, n).
+int64_t golangc_rand_intn(int64_t n);
+/// Return a pseudo-random float64 in [0.0, 1.0).
+double golangc_rand_float64(void);
 
 } // extern "C"
 

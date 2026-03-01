@@ -4445,3 +4445,536 @@ func main() {
     EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
 }
 
+
+// ============================================================================
+// Phase 25 Tests: fmt.Scan*, sort, os.Getenv, strings extras
+// ============================================================================
+
+TEST(Phase25Test, FmtScanCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    var x int
+    fmt.Scan(&x)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase25Test, FmtScanEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    var x int
+    fmt.Scan(&x)
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_fmt_scan"));
+}
+
+TEST(Phase25Test, FmtScanlnCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    var n int
+    fmt.Scanln(&n)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase25Test, FmtScanfCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    var n int
+    fmt.Scanf("%d", &n)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase25Test, FmtSscanfCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    var a, b int
+    fmt.Sscanf("10 20", "%d %d", &a, &b)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase25Test, FmtSscanfEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    var a, b int
+    fmt.Sscanf("10 20", "%d %d", &a, &b)
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_fmt_sscanf"));
+}
+
+TEST(Phase25Test, FmtSscanCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    var x int
+    fmt.Sscan("42", &x)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase25Test, SortIntsCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "sort"
+func main() {
+    a := []int{3, 1, 2}
+    sort.Ints(a)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase25Test, SortIntsEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "sort"
+func main() {
+    a := []int{3, 1, 2}
+    sort.Ints(a)
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sort_ints"));
+}
+
+TEST(Phase25Test, SortStringsCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "sort"
+func main() {
+    a := []string{"banana", "apple", "cherry"}
+    sort.Strings(a)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase25Test, SortStringsEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "sort"
+func main() {
+    a := []string{"banana", "apple"}
+    sort.Strings(a)
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sort_strings"));
+}
+
+TEST(Phase25Test, SortSliceCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "sort"
+func main() {
+    a := []int{5, 2, 8, 1}
+    sort.Slice(a, func(i, j int) bool { return a[i] < a[j] })
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase25Test, OsGetenvCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    s := os.Getenv("PATH")
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase25Test, OsGetenvEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    s := os.Getenv("PATH")
+    _ = s
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_getenv"));
+}
+
+TEST(Phase25Test, StringsFieldsCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    parts := strings.Fields("hello world  foo")
+    _ = parts
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase25Test, StringsFieldsEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    parts := strings.Fields("hello world")
+    _ = parts
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_fields"));
+}
+
+TEST(Phase25Test, StringsTrimSuffixCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    s := strings.TrimSuffix("hello.go", ".go")
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase25Test, StringsTrimPrefixEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    s := strings.TrimPrefix("foobar", "foo")
+    _ = s
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_trim_prefix"));
+}
+
+TEST(Phase25Test, StringsSplitRealCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    parts := strings.Split("a,b,c", ",")
+    _ = parts
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase25Test, StringsSplitEmitsRealRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    parts := strings.Split("a,b,c", ",")
+    _ = parts
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_split"));
+}
+
+TEST(Phase25Test, StringsJoinCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    elems := []string{"a", "b", "c"}
+    s := strings.Join(elems, ",")
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase25Test, StringsJoinEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    elems := []string{"a", "b", "c"}
+    s := strings.Join(elems, ",")
+    _ = s
+}
+)");
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_join"));
+}
+
+TEST(Phase25Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+    "sort"
+    "strings"
+)
+func main() {
+    home := os.Getenv("HOME")
+    fmt.Println("HOME=" + home)
+    words := strings.Fields("the quick brown fox")
+    sort.Strings(words)
+    fmt.Println(strings.Join(words, ","))
+    parts := strings.Split("a:b:c", ":")
+    _ = parts
+    fmt.Println(strings.TrimSuffix("hello.go", ".go"))
+    nums := []int{5, 3, 1, 4, 2}
+    sort.Ints(nums)
+    var x, y int
+    fmt.Sscanf("10 20", "%d %d", &x, &y)
+    fmt.Println(x + y)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sort_ints"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_join"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_getenv"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+// ============================================================================
+// Phase 26 Tests: Named returns, []byte conversion, fmt.Sprint, time, rand
+// ============================================================================
+
+TEST(Phase26Test, NamedReturnNoError) {
+    // Named return values must not trigger "declared and not used" error
+    auto result = compile_to_asm(R"(
+package main
+func divide(a, b int) (result int, err error) {
+    result = a / b
+    return
+}
+func main() {
+    r, _ := divide(10, 2)
+    _ = r
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase26Test, NamedReturnMultiple) {
+    auto result = compile_to_asm(R"(
+package main
+func minMax(nums []int) (min, max int) {
+    min = nums[0]
+    max = nums[0]
+    for _, n := range nums {
+        if n < min { min = n }
+        if n > max { max = n }
+    }
+    return
+}
+func main() {
+    a := []int{3, 1, 4, 1, 5}
+    lo, hi := minMax(a)
+    _ = lo
+    _ = hi
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase26Test, ByteSliceConversionCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    s := "hello"
+    b := []byte(s)
+    _ = b
+    fmt.Println(s)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase26Test, ByteSliceConversionEmitsCode) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    s := "world"
+    b := []byte(s)
+    _ = b
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase26Test, FmtSprintCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    s := fmt.Sprint("hello", " ", "world")
+    fmt.Println(s)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase26Test, FmtSprintEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    s := fmt.Sprint(42)
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(Phase26Test, TimeSleepCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "time"
+func main() {
+    time.Sleep(time.Second)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase26Test, TimeSleepEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "time"
+func main() {
+    time.Sleep(100 * time.Millisecond)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_time_sleep"));
+}
+
+TEST(Phase26Test, TimeNowCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "time"
+func main() {
+    t := time.Now()
+    _ = t
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase26Test, TimeNowEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "time"
+func main() {
+    t := time.Now()
+    _ = t
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_time_now"));
+}
+
+TEST(Phase26Test, TimeSinceCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "time"
+func main() {
+    start := time.Now()
+    elapsed := time.Since(start)
+    _ = elapsed
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase26Test, RandIntnCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/rand"
+func main() {
+    n := rand.Intn(100)
+    _ = n
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase26Test, RandIntnEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/rand"
+func main() {
+    n := rand.Intn(10)
+    _ = n
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_rand_intn"));
+}
+
+TEST(Phase26Test, RandFloat64CompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/rand"
+func main() {
+    f := rand.Float64()
+    _ = f
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase26Test, RandSeedCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/rand"
+func main() {
+    rand.Seed(42)
+    n := rand.Intn(100)
+    _ = n
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase26Test, GoFull) {
+    // Combined Phase 26 features
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "math/rand"
+    "time"
+)
+func clamp(v, lo, hi int) (result int) {
+    result = v
+    if result < lo { result = lo }
+    if result > hi { result = hi }
+    return
+}
+func main() {
+    rand.Seed(time.Now())
+    n := rand.Intn(100)
+    c := clamp(n, 10, 90)
+    s := fmt.Sprint("clamped:", c)
+    fmt.Println(s)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}

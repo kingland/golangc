@@ -156,10 +156,12 @@ void Checker::check_func_decl(ast::FuncDecl& decl) {
                 ++param_idx;
             }
             // Add named return values to scope
+            // Named return values are exempt from "declared and not used" checks
             for (const auto& result : func_type->func->results) {
                 if (!result.name.empty() && result.name != "_") {
-                    (void)declare(SymbolKind::Var, result.name, result.type,
-                                  decl.loc);
+                    auto* rsym = declare(SymbolKind::Var, result.name, result.type,
+                                         decl.loc);
+                    if (rsym) rsym->used = true;
                 }
             }
         }
@@ -255,10 +257,12 @@ void Checker::check_method(ast::FuncDecl& decl) {
                 }
                 ++param_idx;
             }
+            // Named return values are exempt from "declared and not used" checks
             for (const auto& result : func_type->func->results) {
                 if (!result.name.empty() && result.name != "_") {
-                    (void)declare(SymbolKind::Var, result.name, result.type,
-                                  decl.loc);
+                    auto* rsym = declare(SymbolKind::Var, result.name, result.type,
+                                         decl.loc);
+                    if (rsym) rsym->used = true;
                 }
             }
         }

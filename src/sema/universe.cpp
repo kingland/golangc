@@ -214,6 +214,9 @@ Scope* init_universe(ArenaAllocator& arena) {
     (void)scope->insert(make_pseudo_pkg("sync"));
     (void)scope->insert(make_pseudo_pkg("io"));
     (void)scope->insert(make_pseudo_pkg("bufio"));
+    (void)scope->insert(make_pseudo_pkg("sort"));
+    (void)scope->insert(make_pseudo_pkg("time"));
+    (void)scope->insert(make_pseudo_pkg("rand"));
 
     // ---- error interface type ----
     // type error interface { Error() string }

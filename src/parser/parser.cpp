@@ -2202,12 +2202,20 @@ Expr* Parser::parse_operand() {
             return e;
         }
         case TokenKind::LBracket: {
-            // [N]T{...} or []T{...} as composite literal
+            // [N]T{...} or []T{...} as composite literal or type conversion []T(x)
             auto* type = parse_array_or_slice_type();
             if (current_.kind == TokenKind::LBrace) {
                 return parse_composite_lit(type);
             }
-            return make_bad_expr(type->location());
+            // Type conversion: []T(x) or [N]T(x) — return type carrier so
+            // parse_call_expr can wrap it in a Call node.
+            auto* te = make_expr(ExprKind::CompositeLit);
+            te->composite_lit.loc = type->location();
+            te->composite_lit.type = type;
+            te->composite_lit.elts = {};
+            te->composite_lit.lbrace = {};
+            te->composite_lit.rbrace = {};
+            return te;
         }
 
         default:
