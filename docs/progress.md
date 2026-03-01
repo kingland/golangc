@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 26 (Bug fixes + fmt.Sprint + time + math/rand) - Complete
-## Current Milestone: Phase 26 complete - named return values bug fix, []byte(s) type conversion bug fix, fmt.Sprint, time.Sleep/Now/Since/Duration constants, math/rand.Intn/Float64/Seed — 16 new Phase26Test tests (304 codegen tests, 691 total)
-## Completion Estimate: 95%
+## Current Phase: 27 (math constants + elided composite literals) - Complete
+## Current Milestone: Phase 27 complete - math.Pi/E/MaxFloat64/MaxInt64 constants, math.Sin/Cos/Tan/Atan2/Exp/Mod etc., type-elided composite literals in map/slice/struct literals — 13 new Phase27Test tests (317 codegen tests, 704 total)
+## Completion Estimate: 96%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -14,11 +14,29 @@
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T in call args fixed |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction; spread type check fix; unused param false positive fix |
 | IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq, make_array_type public |
-| CodeGen | ✅ Complete | 304 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, buffered+unbuffered channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os/strings/math/errors/sync/bufio/sort/time/rand pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings.Builder, errors.New, fmt.Errorf, sync.Mutex, sync.WaitGroup, os.Stdout/Stderr/Stdin, fmt.Fprintf/Fprintln/Scan/Scanln/Scanf/Sscan/Sscanf/Sprint/Fprint, os.Exit/Open/Create/ReadFile/Getenv, os.File.Close/WriteString, strconv.ParseInt/ParseFloat/FormatInt/FormatFloat/ParseBool/FormatBool, bufio.NewScanner/NewReader, bufio.Scanner.Scan/Text/Err, bufio.Reader.ReadString, sort.Ints/Strings/Slice, strings.Fields/TrimPrefix/TrimSuffix/Split/Join (real), time.Sleep/Now/Since/Hour/Minute/Second/Millisecond, rand.Intn/Float64/Seed, []byte(s) type conversion, named return values |
+| CodeGen | ✅ Complete | 317 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, buffered+unbuffered channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os/strings/math/errors/sync/bufio/sort/time/rand pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings.Builder, errors.New, fmt.Errorf, sync.Mutex, sync.WaitGroup, os.Stdout/Stderr/Stdin, fmt.Fprintf/Fprintln/Scan/Scanln/Scanf/Sscan/Sscanf/Sprint/Fprint, os.Exit/Open/Create/ReadFile/Getenv, os.File.Close/WriteString, strconv.ParseInt/ParseFloat/FormatInt/FormatFloat/ParseBool/FormatBool, bufio.NewScanner/NewReader, bufio.Scanner.Scan/Text/Err, bufio.Reader.ReadString, sort.Ints/Strings/Slice, strings.Fields/TrimPrefix/TrimSuffix/Split/Join (real), time.Sleep/Now/Since/Hour/Minute/Second/Millisecond, rand.Intn/Float64/Seed, []byte(s) type conversion, named return values |
 | Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel (unbuffered+buffered ring buffer) + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get + golangc_string_decode_rune + strings package + math package + golangc_builder_{make,write_string,write_byte,string,reset,len} + golangc_errors_new + golangc_fmt_errorf + golangc_mutex_{make,lock,unlock,try_lock} + golangc_waitgroup_{make,add,done,wait} + golangc_file struct + golangc_os_stdout/stderr/stdin + golangc_fprintf + golangc_os_exit + golangc_os_open/create/file_close/file_write_string/getenv + golangc_parse_float/format_float/parse_bool/format_bool (strconv_ext.cpp) + golangc_scanner_{new,scan,text} + golangc_breader_{new,read_string} + golangc_os_read_file (bufio.cpp) + golangc_fmt_scan/scanln/scanf/sscan/sscanf (fmt_scan.cpp) + golangc_sort_ints/strings/slice (sort.cpp) + golangc_strings_fields/trim_prefix/trim_suffix/split/join + golangc_time_sleep/now/since + golangc_rand_seed/intn/float64 |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
+
+### Session 27 - Phase 27: math constants + elided composite literals (2026-03-01)
+#### Completed
+- **`math` constants** — `math.Pi`, `math.E`, `math.Phi`, `math.Sqrt2`, `math.Ln2`, `math.Log2E`, `math.Ln10`, `math.Log10E`, `math.MaxFloat32/64`, `math.SmallestNonzeroFloat32/64`, `math.MaxInt/MinInt/MaxInt8-64/MinInt8-64/MaxUint8-32/64` — all emit float64 or int64 constant values from `gen_selector`; no runtime call needed
+- **New math functions** — `math.Sin/Cos/Tan/Asin/Acos/Atan/Atan2/Trunc/Exp/Exp2/Mod/Hypot` — added to checker_expr.cpp dispatch, IR gen single-arg and two-arg blocks, runtime.hpp declarations, and runtime.cpp implementations (thin wrappers around `<cmath>`)
+- **Type-elided composite literals** — `{field: val}` shorthand inside map/slice/struct composite literals now parses and typechecks correctly:
+  - Parser: `parse_element()` checks for `{` first and calls `parse_composite_lit(nullptr)` (null type = elided)
+  - Sema: when element type is nullptr, checker permissively checks sub-elements; for map/slice/array outer literals, infers element type and records it via `record_expr`
+  - IR gen: `gen_composite_lit` now gets correct type from `expr_info` thanks to sema recording
+- Added 13 `Phase27Test` tests (13/13 pass)
+- 317 codegen tests, 704 total — all 6 test suites pass
+#### Current State
+- math constants and new trig/exp functions work
+- `{Count: 1}` shorthand inside `map[string]T{...}` and `[]T{{...}, {...}}` works
+#### Next Steps
+- `strings.ContainsRune`, `strings.IndexByte`, `strings.LastIndex`, `strings.Map`
+- `fmt.Stringer` interface auto-dispatch
+- Multi-line string processing programs
 
 ### Session 26 - Phase 26: Bug fixes + fmt.Sprint + time + math/rand (2026-03-01)
 #### Completed

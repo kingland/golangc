@@ -183,8 +183,13 @@ ExprInfo Checker::check_composite_lit(ast::CompositeLitExpr& expr) {
     ExprInfo info;
 
     if (!expr.type) {
-        diag_.error(expr.loc, "missing type in composite literal");
-        return info;
+        // Type-elided composite literal inside another composite literal
+        // (e.g. map[string]T{"k": {field: val}}). Check elements permissively;
+        // the IR generator will infer type from surrounding context.
+        for (auto* elt : expr.elts.span()) {
+            if (elt) (void)check_expr(elt);
+        }
+        return info; // type stays nullptr; IR gen handles it
     }
 
     Type* lit_type = resolve_type(expr.type);
@@ -243,10 +248,50 @@ ExprInfo Checker::check_composite_lit(ast::CompositeLitExpr& expr) {
             diag_.error(expr.loc, "too few/many values in struct literal");
         }
     } else {
-        // Array, slice, map — just check element expressions
+        // Array, slice, map — check element expressions.
+        // For map literals with struct/composite values, infer type for elided literals.
+        Type* elem_type = nullptr;
+        if (u->kind == sema::TypeKind::Map)   elem_type = u->map.value;
+        if (u->kind == sema::TypeKind::Slice) elem_type = u->slice.element;
+        if (u->kind == sema::TypeKind::Array) elem_type = u->array.element;
+
         for (auto* elt : expr.elts.span()) {
             if (!elt) continue;
-            (void)check_expr(elt);
+            // Key-value pair: infer value type for elided composite literals
+            if (elt->kind == ast::ExprKind::KeyValue) {
+                auto& kv = elt->key_value;
+                (void)check_expr(kv.key);
+                // If the value is a type-elided composite literal, set its type
+                if (kv.value && kv.value->kind == ast::ExprKind::CompositeLit &&
+                    !kv.value->composite_lit.type && elem_type) {
+                    // Synthesize a type for this elided composite literal
+                    kv.value->composite_lit.type = nullptr; // stays nil
+                    // Record expr_info with the inferred element type
+                    ExprInfo elt_info;
+                    elt_info.type = elem_type;
+                    record_expr(kv.value, elt_info);
+                    // Check its sub-elements recursively using the element type
+                    const Type* elem_u = underlying(elem_type);
+                    if (elem_u && elem_u->kind == TypeKind::Struct && elem_u->struct_) {
+                        for (auto* sub : kv.value->composite_lit.elts.span()) {
+                            if (sub) (void)check_expr(sub);
+                        }
+                    }
+                } else {
+                    (void)check_expr(kv.value);
+                }
+            } else if (elt->kind == ast::ExprKind::CompositeLit &&
+                       !elt->composite_lit.type && elem_type) {
+                // Positional element that is a type-elided composite literal
+                ExprInfo elt_info;
+                elt_info.type = elem_type;
+                record_expr(elt, elt_info);
+                for (auto* sub : elt->composite_lit.elts.span()) {
+                    if (sub) (void)check_expr(sub);
+                }
+            } else {
+                (void)check_expr(elt);
+            }
         }
     }
 
@@ -518,6 +563,38 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
 
     if (pkg == "math") {
         auto* f64_type = basic_type(BasicKind::Float64);
+        auto* int_type = basic_type(BasicKind::Int64);
+        // math constants — returned as float64/int constant values in IR
+        if (sel == "Pi")         { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; } // sentinel; IR handles by name
+        if (sel == "E")          { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "Phi")        { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "Sqrt2")      { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "SqrtE")      { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "SqrtPi")     { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "SqrtPhi")    { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "Ln2")        { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "Log2E")      { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "Ln10")       { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "Log10E")     { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "MaxFloat32") { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "MaxFloat64") { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "SmallestNonzeroFloat32") { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "SmallestNonzeroFloat64") { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = f64_type; return info; }
+        if (sel == "MaxInt")   { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        if (sel == "MinInt")   { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        if (sel == "MaxInt8")  { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        if (sel == "MaxInt16") { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        if (sel == "MaxInt32") { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        if (sel == "MaxInt64") { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        if (sel == "MinInt8")  { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        if (sel == "MinInt16") { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        if (sel == "MinInt32") { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        if (sel == "MinInt64") { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        if (sel == "MaxUint8")  { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        if (sel == "MaxUint16") { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        if (sel == "MaxUint32") { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        if (sel == "MaxUint64") { info.symbol = make_member_builtin(BuiltinId::MathAbs); info.type = int_type; return info; }
+        // math functions
         if (sel == "Abs")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
         if (sel == "Sqrt")  { info.symbol = make_member_builtin(BuiltinId::MathSqrt);  info.type = f64_type; return info; }
         if (sel == "Floor") { info.symbol = make_member_builtin(BuiltinId::MathFloor); info.type = f64_type; return info; }
@@ -529,6 +606,22 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
         if (sel == "Log")   { info.symbol = make_member_builtin(BuiltinId::MathLog);   info.type = f64_type; return info; }
         if (sel == "Log2")  { info.symbol = make_member_builtin(BuiltinId::MathLog2);  info.type = f64_type; return info; }
         if (sel == "Log10") { info.symbol = make_member_builtin(BuiltinId::MathLog10); info.type = f64_type; return info; }
+        if (sel == "Sin")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Cos")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Tan")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Inf")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "IsInf") { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = basic_type(BasicKind::Bool); return info; }
+        if (sel == "IsNaN") { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = basic_type(BasicKind::Bool); return info; }
+        if (sel == "NaN")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Mod")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Trunc") { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Exp")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Exp2")  { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Hypot") { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Atan2") { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Atan")  { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Asin")  { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Acos")  { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
     }
 
     if (pkg == "sort") {

@@ -895,6 +895,18 @@ double golangc_math_pow(double x, double y){ return pow(x, y); }
 double golangc_math_log(double x)          { return log(x); }
 double golangc_math_log2(double x)         { return log2(x); }
 double golangc_math_log10(double x)        { return log10(x); }
+double golangc_math_sin(double x)          { return sin(x); }
+double golangc_math_cos(double x)          { return cos(x); }
+double golangc_math_tan(double x)          { return tan(x); }
+double golangc_math_asin(double x)         { return asin(x); }
+double golangc_math_acos(double x)         { return acos(x); }
+double golangc_math_atan(double x)         { return atan(x); }
+double golangc_math_atan2(double y, double x) { return atan2(y, x); }
+double golangc_math_trunc(double x)        { return trunc(x); }
+double golangc_math_exp(double x)          { return exp(x); }
+double golangc_math_exp2(double x)         { return exp2(x); }
+double golangc_math_mod(double x, double y){ return fmod(x, y); }
+double golangc_math_hypot(double x, double y){ return hypot(x, y); }
 
 // ============================================================================
 // strings.Builder

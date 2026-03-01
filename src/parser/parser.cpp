@@ -2247,15 +2247,25 @@ Expr* Parser::parse_composite_lit(TypeExpr* type) {
 }
 
 Expr* Parser::parse_element() {
+    // Elements can themselves be composite literals with elided types: {k: v} or {v1, v2}
+    // Go spec: if the element type is a struct/array/slice/map, the type can be omitted.
+    if (current_.kind == TokenKind::LBrace) {
+        return parse_composite_lit(nullptr); // type-elided composite literal
+    }
+
     auto* x = parse_expr();
 
     // Check for key: value
     if (current_.kind == TokenKind::Colon) {
         SourceLocation colon = current_.location;
         advance();
-        auto* value = parse_expr();
-        // Check if value is a composite literal without explicit type (nested { ... })
-        // This is handled by parse_expr -> parse_primary_expr -> parse_operand
+        // The value side may also be a type-elided composite literal
+        Expr* value;
+        if (current_.kind == TokenKind::LBrace) {
+            value = parse_composite_lit(nullptr);
+        } else {
+            value = parse_expr();
+        }
 
         auto* kv = make_expr(ExprKind::KeyValue);
         kv->key_value.loc = x->location();

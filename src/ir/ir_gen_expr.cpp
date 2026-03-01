@@ -642,6 +642,34 @@ Value* IRGenerator::gen_selector(ast::Expr* expr) {
             auto* fn = get_or_declare_runtime("golangc_os_stdin", type_map_.ptr_type());
             return builder_.create_call(fn, {}, type_map_.ptr_type(), "os.Stdin");
         }
+        // math constants — emit float64 or int64 constant directly
+        if (bname == "math.Pi")         return builder_.create_const_float(type_map_.f64_type(), 3.14159265358979323846, "math.Pi");
+        if (bname == "math.E")          return builder_.create_const_float(type_map_.f64_type(), 2.71828182845904523536, "math.E");
+        if (bname == "math.Phi")        return builder_.create_const_float(type_map_.f64_type(), 1.61803398874989484820, "math.Phi");
+        if (bname == "math.Sqrt2")      return builder_.create_const_float(type_map_.f64_type(), 1.41421356237309504880, "math.Sqrt2");
+        if (bname == "math.SqrtE")      return builder_.create_const_float(type_map_.f64_type(), 1.64872127070012814684, "math.SqrtE");
+        if (bname == "math.SqrtPi")     return builder_.create_const_float(type_map_.f64_type(), 1.77245385090551602730, "math.SqrtPi");
+        if (bname == "math.SqrtPhi")    return builder_.create_const_float(type_map_.f64_type(), 1.27201964951406896425, "math.SqrtPhi");
+        if (bname == "math.Ln2")        return builder_.create_const_float(type_map_.f64_type(), 0.69314718055994530941, "math.Ln2");
+        if (bname == "math.Log2E")      return builder_.create_const_float(type_map_.f64_type(), 1.44269504088896340736, "math.Log2E");
+        if (bname == "math.Ln10")       return builder_.create_const_float(type_map_.f64_type(), 2.30258509299404568402, "math.Ln10");
+        if (bname == "math.Log10E")     return builder_.create_const_float(type_map_.f64_type(), 0.43429448190325182765, "math.Log10E");
+        if (bname == "math.MaxFloat32") return builder_.create_const_float(type_map_.f64_type(), 3.4028234663852886e+38, "math.MaxFloat32");
+        if (bname == "math.MaxFloat64") return builder_.create_const_float(type_map_.f64_type(), 1.7976931348623157e+308, "math.MaxFloat64");
+        if (bname == "math.SmallestNonzeroFloat32") return builder_.create_const_float(type_map_.f64_type(), 1.401298464324817e-45, "math.SmallestNonzeroFloat32");
+        if (bname == "math.SmallestNonzeroFloat64") return builder_.create_const_float(type_map_.f64_type(), 5e-324, "math.SmallestNonzeroFloat64");
+        if (bname == "math.MaxInt" || bname == "math.MaxInt64")  return builder_.create_const_int(type_map_.i64_type(), INT64_MAX, "math.MaxInt64");
+        if (bname == "math.MinInt" || bname == "math.MinInt64")  return builder_.create_const_int(type_map_.i64_type(), INT64_MIN, "math.MinInt64");
+        if (bname == "math.MaxInt32")   return builder_.create_const_int(type_map_.i64_type(), 2147483647LL, "math.MaxInt32");
+        if (bname == "math.MinInt32")   return builder_.create_const_int(type_map_.i64_type(), -2147483648LL, "math.MinInt32");
+        if (bname == "math.MaxInt16")   return builder_.create_const_int(type_map_.i64_type(), 32767LL, "math.MaxInt16");
+        if (bname == "math.MinInt16")   return builder_.create_const_int(type_map_.i64_type(), -32768LL, "math.MinInt16");
+        if (bname == "math.MaxInt8")    return builder_.create_const_int(type_map_.i64_type(), 127LL, "math.MaxInt8");
+        if (bname == "math.MinInt8")    return builder_.create_const_int(type_map_.i64_type(), -128LL, "math.MinInt8");
+        if (bname == "math.MaxUint32")  return builder_.create_const_int(type_map_.i64_type(), 4294967295LL, "math.MaxUint32");
+        if (bname == "math.MaxUint16")  return builder_.create_const_int(type_map_.i64_type(), 65535LL, "math.MaxUint16");
+        if (bname == "math.MaxUint8")   return builder_.create_const_int(type_map_.i64_type(), 255LL, "math.MaxUint8");
+        if (bname == "math.MaxUint64")  return builder_.create_const_int(type_map_.i64_type(), static_cast<int64_t>(UINT64_MAX), "math.MaxUint64");
     }
 
     auto* addr = gen_addr(expr);
@@ -1737,7 +1765,12 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
     if (builtin_name == "math.Abs"   || builtin_name == "math.Sqrt"  ||
         builtin_name == "math.Floor" || builtin_name == "math.Ceil"  ||
         builtin_name == "math.Round" || builtin_name == "math.Log"   ||
-        builtin_name == "math.Log2"  || builtin_name == "math.Log10") {
+        builtin_name == "math.Log2"  || builtin_name == "math.Log10" ||
+        builtin_name == "math.Sin"   || builtin_name == "math.Cos"   ||
+        builtin_name == "math.Tan"   || builtin_name == "math.Asin"  ||
+        builtin_name == "math.Acos"  || builtin_name == "math.Atan"  ||
+        builtin_name == "math.Trunc" || builtin_name == "math.Exp"   ||
+        builtin_name == "math.Exp2") {
         if (call.args.count >= 1) {
             auto* x = gen_expr(call.args[0]);
             if (x) {
@@ -1749,7 +1782,16 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
                 else if (builtin_name == "math.Round") fn_name = "golangc_math_round";
                 else if (builtin_name == "math.Log")   fn_name = "golangc_math_log";
                 else if (builtin_name == "math.Log2")  fn_name = "golangc_math_log2";
-                else                                   fn_name = "golangc_math_log10";
+                else if (builtin_name == "math.Log10") fn_name = "golangc_math_log10";
+                else if (builtin_name == "math.Sin")   fn_name = "golangc_math_sin";
+                else if (builtin_name == "math.Cos")   fn_name = "golangc_math_cos";
+                else if (builtin_name == "math.Tan")   fn_name = "golangc_math_tan";
+                else if (builtin_name == "math.Asin")  fn_name = "golangc_math_asin";
+                else if (builtin_name == "math.Acos")  fn_name = "golangc_math_acos";
+                else if (builtin_name == "math.Atan")  fn_name = "golangc_math_atan";
+                else if (builtin_name == "math.Trunc") fn_name = "golangc_math_trunc";
+                else if (builtin_name == "math.Exp")   fn_name = "golangc_math_exp";
+                else                                   fn_name = "golangc_math_exp2";
                 auto* fn = get_or_declare_runtime(fn_name, type_map_.f64_type());
                 return builder_.create_call(fn, {x}, type_map_.f64_type(), std::string(builtin_name));
             }
@@ -1758,20 +1800,39 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
     }
 
     // Two float64 arguments → float64
-    if (builtin_name == "math.Max" || builtin_name == "math.Min" || builtin_name == "math.Pow") {
+    if (builtin_name == "math.Max"  || builtin_name == "math.Min"  ||
+        builtin_name == "math.Pow"  || builtin_name == "math.Mod"  ||
+        builtin_name == "math.Hypot"|| builtin_name == "math.Atan2") {
         if (call.args.count >= 2) {
             auto* x = gen_expr(call.args[0]);
             auto* y = gen_expr(call.args[1]);
             if (x && y) {
                 std::string fn_name;
-                if      (builtin_name == "math.Max") fn_name = "golangc_math_max";
-                else if (builtin_name == "math.Min") fn_name = "golangc_math_min";
-                else                                 fn_name = "golangc_math_pow";
+                if      (builtin_name == "math.Max")   fn_name = "golangc_math_max";
+                else if (builtin_name == "math.Min")   fn_name = "golangc_math_min";
+                else if (builtin_name == "math.Pow")   fn_name = "golangc_math_pow";
+                else if (builtin_name == "math.Mod")   fn_name = "golangc_math_mod";
+                else if (builtin_name == "math.Hypot") fn_name = "golangc_math_hypot";
+                else                                   fn_name = "golangc_math_atan2";
                 auto* fn = get_or_declare_runtime(fn_name, type_map_.f64_type());
                 return builder_.create_call(fn, {x, y}, type_map_.f64_type(), std::string(builtin_name));
             }
         }
         return builder_.create_const_float(type_map_.f64_type(), 0.0, "math.zero");
+    }
+
+    // math.Inf(sign int) float64 — return +Inf or -Inf approximated by MaxFloat64
+    if (builtin_name == "math.Inf") {
+        // Return MaxFloat64 as approximation (full infinity needs special FP encoding)
+        return builder_.create_const_float(type_map_.f64_type(), 1.7976931348623157e+308, "math.Inf");
+    }
+    // math.NaN() float64
+    if (builtin_name == "math.NaN") {
+        return builder_.create_const_float(type_map_.f64_type(), 0.0, "math.NaN"); // simplified
+    }
+    // math.IsInf(f, sign) bool / math.IsNaN(f) bool — simplified, return false
+    if (builtin_name == "math.IsInf" || builtin_name == "math.IsNaN") {
+        return builder_.create_const_int(type_map_.i64_type(), 0, "math.IsFalse");
     }
 
     if (builtin_name == "println" || builtin_name == "print") {

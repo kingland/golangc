@@ -239,6 +239,30 @@ double golangc_math_log(double x);
 double golangc_math_log2(double x);
 /// math.Log10
 double golangc_math_log10(double x);
+/// math.Sin
+double golangc_math_sin(double x);
+/// math.Cos
+double golangc_math_cos(double x);
+/// math.Tan
+double golangc_math_tan(double x);
+/// math.Asin
+double golangc_math_asin(double x);
+/// math.Acos
+double golangc_math_acos(double x);
+/// math.Atan
+double golangc_math_atan(double x);
+/// math.Atan2
+double golangc_math_atan2(double y, double x);
+/// math.Trunc
+double golangc_math_trunc(double x);
+/// math.Exp
+double golangc_math_exp(double x);
+/// math.Exp2
+double golangc_math_exp2(double x);
+/// math.Mod
+double golangc_math_mod(double x, double y);
+/// math.Hypot
+double golangc_math_hypot(double x, double y);
 
 // ---- strings.Builder ----
 

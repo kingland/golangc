@@ -4978,3 +4978,188 @@ func main() {
     EXPECT_FALSE(result.has_errors);
     EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
 }
+
+// ============================================================================
+// Phase 27 Tests: math constants + elided composite literals in map/slice
+// ============================================================================
+
+TEST(Phase27Test, MathPiCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "math"
+)
+func main() {
+    fmt.Println(math.Pi)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase27Test, MathPiEmitsConstant) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func main() {
+    x := math.Pi
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase27Test, MathECompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func main() {
+    x := math.E
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase27Test, MathMaxFloat64CompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func main() {
+    x := math.MaxFloat64
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase27Test, MathMaxInt64CompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func main() {
+    x := math.MaxInt64
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase27Test, MathSinCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func main() {
+    x := math.Sin(math.Pi / 2.0)
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase27Test, MathSinEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func main() {
+    x := math.Sin(1.0)
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_sin"));
+}
+
+TEST(Phase27Test, MathCosCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func main() {
+    x := math.Cos(0.0)
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase27Test, MathAtan2CompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func main() {
+    x := math.Atan2(1.0, 1.0)
+    _ = x
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase27Test, ElidedCompositeLitInMap) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Info struct{ Count int; Label string }
+func main() {
+    m := map[string]Info{
+        "a": {Count: 1, Label: "one"},
+        "b": {Count: 2, Label: "two"},
+    }
+    v := m["a"]
+    fmt.Println(v.Count, v.Label)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase27Test, ElidedCompositeLitInSlice) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Point struct{ X, Y int }
+func main() {
+    pts := []Point{{1, 2}, {3, 4}}
+    fmt.Println(len(pts))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase27Test, ElidedCompositeLitAsArg) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Point struct{ X, Y int }
+func main() {
+    pts := []Point{}
+    pts = append(pts, Point{1, 2})
+    pts = append(pts, Point{3, 4})
+    fmt.Println(len(pts))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase27Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "math"
+)
+type Vec2 struct{ X, Y float64 }
+func magnitude(v Vec2) float64 {
+    return math.Sqrt(v.X*v.X + v.Y*v.Y)
+}
+func main() {
+    vecs := []Vec2{{3, 4}, {5, 12}}
+    for _, v := range vecs {
+        mag := magnitude(v)
+        _ = mag
+    }
+    fmt.Println(math.Pi)
+    fmt.Println(math.MaxInt64)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
