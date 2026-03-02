@@ -193,7 +193,45 @@ Value* IRGenerator::gen_basic_lit(ast::Expr* expr) {
             auto sv = lit.value;
             std::string val;
             if (sv.size() >= 2) {
-                val = std::string(sv.substr(1, sv.size() - 2));
+                // Strip quotes and process escape sequences
+                auto raw = sv.substr(1, sv.size() - 2);
+                val.reserve(raw.size());
+                for (size_t i = 0; i < raw.size(); ++i) {
+                    if (raw[i] == '\\' && i + 1 < raw.size()) {
+                        ++i;
+                        switch (raw[i]) {
+                            case 'n':  val += '\n'; break;
+                            case 't':  val += '\t'; break;
+                            case 'r':  val += '\r'; break;
+                            case '\\': val += '\\'; break;
+                            case '"':  val += '"';  break;
+                            case '\'': val += '\''; break;
+                            case '0':  val += '\0'; break;
+                            case 'a':  val += '\a'; break;
+                            case 'b':  val += '\b'; break;
+                            case 'f':  val += '\f'; break;
+                            case 'v':  val += '\v'; break;
+                            case 'x': {
+                                // Hex escape: \xHH
+                                if (i + 2 < raw.size()) {
+                                    auto h = [](char c) -> int {
+                                        if (c >= '0' && c <= '9') return c - '0';
+                                        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                                        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                                        return 0;
+                                    };
+                                    int byte_val = h(raw[i+1]) * 16 + h(raw[i+2]);
+                                    val += static_cast<char>(byte_val);
+                                    i += 2;
+                                }
+                                break;
+                            }
+                            default:   val += raw[i]; break;
+                        }
+                    } else {
+                        val += raw[i];
+                    }
+                }
             }
             return builder_.create_const_string(val);
         }
@@ -1210,6 +1248,7 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
     }
 
     // ---- fmt.Printf — call golangc_printf(fmt_ptr, fmt_len, ...) ----
+    // Stringer dispatch: for each non-format arg, check if it has a String() method.
     if (builtin_name == "fmt.Printf") {
         if (call.args.count >= 1) {
             auto* fmt_val = gen_expr(call.args[0]);
@@ -1217,8 +1256,46 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
                 auto* fn = get_or_declare_runtime("golangc_printf", type_map_.void_type());
                 std::vector<Value*> args = {fmt_val};
                 for (uint32_t i = 1; i < call.args.count; ++i) {
-                    auto* a = gen_expr(call.args[i]);
-                    if (a) args.push_back(a);
+                    auto* arg_expr = call.args[i];
+                    auto* arg_info = expr_info(arg_expr);
+                    bool stringer_called = false;
+                    if (arg_info && arg_info->type) {
+                        auto* t = arg_info->type;
+                        const sema::NamedType* named = nullptr;
+                        if (t->kind == sema::TypeKind::Named) named = t->named;
+                        else if (t->kind == sema::TypeKind::Pointer &&
+                                 t->pointer.base && t->pointer.base->kind == sema::TypeKind::Named)
+                            named = t->pointer.base->named;
+                        if (named) {
+                            for (auto& m : named->methods) {
+                                if (m.name != "String") continue;
+                                if (!m.type) continue;
+                                auto* ft = sema::underlying(m.type);
+                                if (!ft || ft->kind != sema::TypeKind::Func) continue;
+                                auto* ftype = ft->func;
+                                if (!ftype || ftype->params.size() != 0 || ftype->results.size() != 1) continue;
+                                auto* ret_u = sema::underlying(ftype->results[0].type);
+                                if (!ret_u || ret_u->kind != sema::TypeKind::Basic ||
+                                    ret_u->basic != sema::BasicKind::String) continue;
+                                std::string stringer_name = std::string(named->name) + ".String";
+                                auto it = func_name_map_.find(stringer_name);
+                                if (it != func_name_map_.end()) {
+                                    auto* recv = gen_expr(arg_expr);
+                                    if (recv) {
+                                        auto* str_val = builder_.create_call(
+                                            it->second, {recv}, type_map_.string_type(), "stringer");
+                                        args.push_back(str_val);
+                                        stringer_called = true;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    if (!stringer_called) {
+                        auto* a = gen_expr(arg_expr);
+                        if (a) args.push_back(a);
+                    }
                 }
                 return builder_.create_call(fn, args, type_map_.void_type(), "printf");
             }
@@ -1535,6 +1612,19 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
         return builder_.create_const_nil(type_map_.ptr_type(), "remove.nil");
     }
 
+    // ---- os.Rename(oldpath, newpath) → error ----
+    if (builtin_name == "os.Rename") {
+        if (call.args.count >= 2) {
+            auto* old_path = gen_expr(call.args[0]);
+            auto* new_path = gen_expr(call.args[1]);
+            if (old_path && new_path) {
+                auto* fn = get_or_declare_runtime("golangc_os_rename", type_map_.i64_type());
+                builder_.create_call(fn, {old_path, new_path}, type_map_.i64_type(), "os.Rename");
+            }
+        }
+        return builder_.create_const_nil(type_map_.interface_type(), "rename.nil.err");
+    }
+
     // ---- os.Mkdir(name, perm) → error ----
     if (builtin_name == "os.Mkdir") {
         if (call.args.count >= 1) {
@@ -1571,6 +1661,41 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
     if (builtin_name == "os.UserHomeDir") {
         auto* fn = get_or_declare_runtime("golangc_os_user_home_dir", type_map_.string_type());
         return builder_.create_call(fn, {}, type_map_.string_type(), "os.UserHomeDir");
+    }
+
+    // ---- os.Stat(name) → (*os.FileInfo, error) ----
+    if (builtin_name == "os.Stat") {
+        if (call.args.count >= 1) {
+            auto* name = gen_expr(call.args[0]);
+            if (name) {
+                auto* fn_stat = get_or_declare_runtime("golangc_os_stat", type_map_.ptr_type());
+                auto* fi_ptr = builder_.create_call(fn_stat, {name}, type_map_.ptr_type(), "os.Stat");
+                // Extract the error interface from the fi_ptr (err_code field)
+                auto* fn_err = get_or_declare_runtime("golangc_os_stat_error", type_map_.interface_type());
+                auto* err_val = builder_.create_call(fn_err, {fi_ptr}, type_map_.interface_type(), "stat.err");
+                std::vector<IRType*> fields = {type_map_.ptr_type(), type_map_.interface_type()};
+                IRType* tuple_ir = type_map_.make_tuple_type(std::move(fields));
+                auto* packed = builder_.create_const_nil(tuple_ir, "stat.pack");
+                packed = builder_.create_insert_value(packed, fi_ptr, 0, "stat.pack");
+                packed = builder_.create_insert_value(packed, err_val, 1, "stat.pack");
+                return packed;
+            }
+        }
+        return builder_.create_const_nil(type_map_.ptr_type(), "stat.nil");
+    }
+
+    // ---- os.IsNotExist(err error) → bool ----
+    // err is a 16-byte interface; codegen passes a pointer to it (large-struct ABI)
+    if (builtin_name == "os.IsNotExist") {
+        if (call.args.count >= 1) {
+            auto* err_val = gen_expr(call.args[0]);
+            if (err_val) {
+                // Pass the interface by pointer; golangc_os_is_not_exist receives void* to {tag, data}
+                auto* fn = get_or_declare_runtime("golangc_os_is_not_exist", type_map_.i64_type());
+                return builder_.create_call(fn, {err_val}, type_map_.i64_type(), "os.IsNotExist");
+            }
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "isnotexist.false");
     }
 
     // ---- strings.NewReader(s) → *strings.Reader ----
@@ -2550,8 +2675,17 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
         if (builtin_name == "strings.Builder.WriteString") {
             Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
             if (!s) return builder_.create_const_int(type_map_.i64_type(), 0, "builder.noarg");
+            // golangc_builder_write_string still returns void; wrap with (len, nil_err)
             auto* fn = get_or_declare_runtime("golangc_builder_write_string", type_map_.void_type());
-            return builder_.create_call(fn, {recv, s}, type_map_.void_type(), "WriteString");
+            builder_.create_call(fn, {recv, s}, type_map_.void_type(), "WriteString");
+            // Return (n, nil) — n = length of written string
+            auto* n = builder_.create_string_len(s, "ws.n");
+            auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+            std::vector<IRType*> fields = {type_map_.i64_type(), type_map_.interface_type()};
+            auto* packed = builder_.create_const_nil(type_map_.make_tuple_type(std::move(fields)), "ws.pack");
+            packed = builder_.create_insert_value(packed, n, 0, "ws.pack");
+            packed = builder_.create_insert_value(packed, nil_err, 1, "ws.pack");
+            return packed;
         }
         if (builtin_name == "strings.Builder.WriteByte") {
             Value* b_val = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
@@ -2649,7 +2783,71 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
             packed = builder_.create_insert_value(packed, nil_err, 1, "ws.pack");
             return packed;
         }
+        // f.Read(b []byte) (int, error) — passes slice header by address
+        if (builtin_name == "os.File.Read") {
+            Value* b = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!b) return builder_.create_const_int(type_map_.i64_type(), 0, "file.read.noarg");
+            auto* fn = get_or_declare_runtime("golangc_os_file_read", type_map_.i64_type());
+            auto* n = builder_.create_call(fn, {recv, b}, type_map_.i64_type(), "Read");
+            auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+            std::vector<IRType*> fields = {type_map_.i64_type(), type_map_.interface_type()};
+            auto* packed = builder_.create_const_nil(type_map_.make_tuple_type(std::move(fields)), "read.pack");
+            packed = builder_.create_insert_value(packed, n, 0, "read.pack");
+            packed = builder_.create_insert_value(packed, nil_err, 1, "read.pack");
+            return packed;
+        }
+        // f.Write(b []byte) (int, error) — passes slice header by address
+        if (builtin_name == "os.File.Write") {
+            Value* b = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!b) return builder_.create_const_int(type_map_.i64_type(), 0, "file.write.noarg");
+            auto* fn = get_or_declare_runtime("golangc_os_file_write", type_map_.i64_type());
+            auto* n = builder_.create_call(fn, {recv, b}, type_map_.i64_type(), "Write");
+            auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+            std::vector<IRType*> fields = {type_map_.i64_type(), type_map_.interface_type()};
+            auto* packed = builder_.create_const_nil(type_map_.make_tuple_type(std::move(fields)), "write.pack");
+            packed = builder_.create_insert_value(packed, n, 0, "write.pack");
+            packed = builder_.create_insert_value(packed, nil_err, 1, "write.pack");
+            return packed;
+        }
+        // f.Seek(offset int64, whence int) (int64, error)
+        if (builtin_name == "os.File.Seek") {
+            Value* offset = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            Value* whence = call.args.count >= 2 ? gen_expr(call.args[1]) : nullptr;
+            if (!offset) offset = builder_.create_const_int(type_map_.i64_type(), 0, "seek.off");
+            if (!whence) whence = builder_.create_const_int(type_map_.i64_type(), 0, "seek.whence");
+            auto* fn = get_or_declare_runtime("golangc_os_file_seek", type_map_.i64_type());
+            auto* pos = builder_.create_call(fn, {recv, offset, whence}, type_map_.i64_type(), "Seek");
+            auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+            std::vector<IRType*> fields = {type_map_.i64_type(), type_map_.interface_type()};
+            auto* packed = builder_.create_const_nil(type_map_.make_tuple_type(std::move(fields)), "seek.pack");
+            packed = builder_.create_insert_value(packed, pos, 0, "seek.pack");
+            packed = builder_.create_insert_value(packed, nil_err, 1, "seek.pack");
+            return packed;
+        }
         return builder_.create_const_int(type_map_.i64_type(), 0, "file.unknown");
+    }
+
+    // ---- os.FileInfo methods ----
+    if (builtin_name.size() > 12 && builtin_name.compare(0, 12, "os.FileInfo.") == 0) {
+        Value* recv = nullptr;
+        if (call.func->kind == ast::ExprKind::Selector) {
+            recv = gen_expr(call.func->selector.x);
+        }
+        if (!recv) return builder_.create_const_int(type_map_.i64_type(), 0, "fi.norecv");
+
+        if (builtin_name == "os.FileInfo.Name") {
+            auto* fn = get_or_declare_runtime("golangc_file_info_name", type_map_.string_type());
+            return builder_.create_call(fn, {recv}, type_map_.string_type(), "fi.Name");
+        }
+        if (builtin_name == "os.FileInfo.Size") {
+            auto* fn = get_or_declare_runtime("golangc_file_info_size", type_map_.i64_type());
+            return builder_.create_call(fn, {recv}, type_map_.i64_type(), "fi.Size");
+        }
+        if (builtin_name == "os.FileInfo.IsDir") {
+            auto* fn = get_or_declare_runtime("golangc_file_info_is_dir", type_map_.i64_type());
+            return builder_.create_call(fn, {recv}, type_map_.i64_type(), "fi.IsDir");
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "fi.unknown");
     }
 
     // ---- bufio.Scanner methods ----

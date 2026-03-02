@@ -58,6 +58,13 @@ IRType* IRTypeMap::make_func_type(IRType* ret, std::vector<IRType*> params) {
     return ptr;
 }
 
+void IRTypeMap::transfer_types_to(std::vector<std::unique_ptr<IRType>>& dest) {
+    for (auto& t : owned_types_) {
+        dest.push_back(std::move(t));
+    }
+    owned_types_.clear();
+}
+
 IRType* IRTypeMap::map_basic_type(sema::BasicKind kind) {
     switch (kind) {
         case sema::BasicKind::Bool:

@@ -35,6 +35,7 @@ add_test(NAME SemaTests COMMAND test_sema)
 add_executable(test_ir
     ir/test_ir.cpp
     ir/test_ir_gen.cpp
+    ir/test_ir_passes.cpp
 )
 target_link_libraries(test_ir PRIVATE golangc_ir golangc_sema golangc_parser golangc_lexer GTest::gtest GTest::gtest_main)
 add_test(NAME IRTests COMMAND test_ir)

@@ -89,9 +89,11 @@ void golangc_breader_read_string(char* sret_out, golangc_breader* r, int64_t del
 // GoRuntimeSlice layout: {ptr, len, cap} (3 x int64 = 24 bytes)
 struct GoRuntimeSlice3 { void* ptr; int64_t len; int64_t cap; };
 
-void golangc_os_read_file(char* sret_out, const char* path_ptr, int64_t path_len) {
+void golangc_os_read_file(char* sret_out, const GoString* path_gs) {
     auto* out = reinterpret_cast<GoRuntimeSlice3*>(sret_out);
     out->ptr = nullptr; out->len = 0; out->cap = 0;
+    const char* path_ptr = path_gs ? path_gs->ptr : nullptr;
+    int64_t path_len     = path_gs ? path_gs->len : 0;
     if (!path_ptr || path_len <= 0) return;
 
     char path_buf[4096];

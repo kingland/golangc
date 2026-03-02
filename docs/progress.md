@@ -1,7 +1,7 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 32 (os.WriteFile/Remove/Mkdir, strings.NewReader, filepath, fmt.Sprintf Stringer) - Complete
-## Current Milestone: Phase 32 complete - os.WriteFile/Remove/Mkdir/MkdirAll/TempDir/UserHomeDir, strings.NewReader + strings.Reader, io.ReadAll, path/filepath (Join/Dir/Base/Ext/Abs), fmt.Sprintf Stringer dispatch — 13 new Phase32Test tests (379 codegen tests, 766 total)
+## Current Phase: 35.5 (GoString ABI fix + string escape processing + samples/files_demo.go compile success)
+## Current Milestone: GoString ABI corrected - removed phantom `int64_t ignored` params; string escape sequences now processed; files_demo.go compiles and runs correctly; 840 total tests still passing
 ## Completion Estimate: 99%
 
 ## Component Status
@@ -11,14 +11,70 @@
 | Common Utils | ✅ Complete | 30 | source_location, diagnostic, string_interner, arena_allocator, result |
 | Lexer | ✅ Complete | 89 | All Go tokens, literals, operators, comments, auto-semicolons |
 | AST | ✅ Complete | - | Full node hierarchy (16 expr, 21 stmt, 7 decl, 13 type kinds) |
-| Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T in call args fixed |
-| Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction; spread type check fix; unused param false positive fix |
-| IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq, make_array_type public |
-| CodeGen | ✅ Complete | 346 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, buffered+unbuffered channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os/strings/math/errors/sync/bufio/sort/time/rand pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings.Builder, errors.New, fmt.Errorf, sync.Mutex, sync.WaitGroup, os.Stdout/Stderr/Stdin, fmt.Fprintf/Fprintln/Scan/Scanln/Scanf/Sscan/Sscanf/Sprint/Fprint, os.Exit/Open/Create/ReadFile/Getenv, os.File.Close/WriteString, strconv.ParseInt/ParseFloat/FormatInt/FormatFloat/ParseBool/FormatBool, bufio.NewScanner/NewReader, bufio.Scanner.Scan/Text/Err, bufio.Reader.ReadString, sort.Ints/Strings/Slice, strings.Fields/TrimPrefix/TrimSuffix/Split/Join (real), time.Sleep/Now/Since/Hour/Minute/Second/Millisecond, rand.Intn/Float64/Seed, []byte(s) type conversion, named return values |
-| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel (unbuffered+buffered ring buffer) + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get + golangc_string_decode_rune + strings package + math package + golangc_builder_{make,write_string,write_byte,string,reset,len} + golangc_errors_new + golangc_fmt_errorf + golangc_mutex_{make,lock,unlock,try_lock} + golangc_waitgroup_{make,add,done,wait} + golangc_file struct + golangc_os_stdout/stderr/stdin + golangc_fprintf + golangc_os_exit + golangc_os_open/create/file_close/file_write_string/getenv + golangc_parse_float/format_float/parse_bool/format_bool (strconv_ext.cpp) + golangc_scanner_{new,scan,text} + golangc_breader_{new,read_string} + golangc_os_read_file (bufio.cpp) + golangc_fmt_scan/scanln/scanf/sscan/sscanf (fmt_scan.cpp) + golangc_sort_ints/strings/slice (sort.cpp) + golangc_strings_fields/trim_prefix/trim_suffix/split/join + golangc_time_sleep/now/since + golangc_rand_seed/intn/float64 |
+| Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T{} composite lit as call arg fixed (Phase 33) |
+| Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction; os.FileInfo opaque type added |
+| IR | ✅ Complete | 101 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq, make_array_type public; Phase 34: Mem2Reg+ConstFold+ConstProp+DCE passes, PassManager, type ownership fix |
+| CodeGen | ✅ Complete | 423 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, buffered+unbuffered channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os/strings/math/errors/sync/bufio/sort/time/rand pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings.Builder, errors.New, fmt.Errorf, sync.Mutex, sync.WaitGroup, os.Stdout/Stderr/Stdin, fmt.Fprintf/Fprintln/Scan/Scanln/Scanf/Sscan/Sscanf/Sprint/Fprint, os.Exit/Open/Create/ReadFile/Getenv/Stat/IsNotExist, os.File.Close/WriteString, os.FileInfo.Name/Size/IsDir, strconv.ParseInt/ParseFloat/FormatInt/FormatFloat/ParseBool/FormatBool, bufio.NewScanner/NewReader, bufio.Scanner.Scan/Text/Err, bufio.Reader.ReadString, sort.Ints/Strings/Slice, strings.Fields/TrimPrefix/TrimSuffix/Split/Join (real), time.Sleep/Now/Since/Hour/Minute/Second/Millisecond, rand.Intn/Float64/Seed, []byte(s) type conversion, named return values, fmt.Printf Stringer dispatch |
+| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel (unbuffered+buffered ring buffer) + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get + golangc_string_decode_rune + strings package + math package + golangc_builder_{make,write_string,write_byte,string,reset,len} + golangc_errors_new + golangc_fmt_errorf + golangc_mutex_{make,lock,unlock,try_lock} + golangc_waitgroup_{make,add,done,wait} + golangc_file struct + golangc_os_stdout/stderr/stdin + golangc_fprintf + golangc_os_exit + golangc_os_open/create/file_close/file_write_string/getenv + golangc_parse_float/format_float/parse_bool/format_bool (strconv_ext.cpp) + golangc_scanner_{new,scan,text} + golangc_breader_{new,read_string} + golangc_os_read_file (bufio.cpp) + golangc_fmt_scan/scanln/scanf/sscan/sscanf (fmt_scan.cpp) + golangc_sort_ints/strings/slice (sort.cpp) + golangc_strings_fields/trim_prefix/trim_suffix/split/join + golangc_time_sleep/now/since + golangc_rand_seed/intn/float64 + golangc_os_stat/stat_error/is_not_exist + golangc_file_info_{name,size,is_dir} |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
+
+### Session 35.5 - GoString ABI Fix + String Escape Processing (2026-03-02)
+#### Completed
+- **GoString ABI fix (root cause)**: Removed ALL `int64_t ignored`/`fmt_ignored`/`str_ignored` dummy parameters from runtime functions taking `const GoString*`. The codegen passes Go strings as large structs by-pointer (LEA, single pointer = 1 register slot), NOT as `(char*, int64_t)` pairs. Phantom `ignored` params were consuming real subsequent arguments, causing segfaults. Fixed in `runtime.hpp`, `runtime.cpp`, `os_file.cpp`, `os_extras.cpp`, `strconv_ext.cpp`, `bufio.cpp`, `fmt_scan.cpp`.
+- **Codegen EXTERN declarations**: `emit_module_header` now dynamically emits EXTERN for empty-body IR functions (runtime declarations) + keeps hardcoded list for opcode-generated calls (map/slice/chan/string_eq/etc.). Added `#include <set>` to x64_codegen.cpp.
+- **Empty body stub fix**: Added `if (func.blocks.empty()) return;` at start of `emit_function` to skip empty runtime declarations, eliminating LNK2005 duplicate symbol errors.
+- **String escape sequences**: Fixed `ir_gen_expr.cpp` `StringLiteral` case to process escape sequences (`\n`, `\t`, `\r`, `\\`, `\"`, `\'`, `\0`, `\a`, `\b`, `\f`, `\v`, `\xHH`). Previously, `\n` in string literals was stored as 2 bytes (backslash + n) instead of 0x0a.
+- **files_demo.go compiles and runs**: `os.Create`, `f.WriteString`, `f.Close`, `strconv.ParseInt`, `strconv.ParseFloat`, `fmt.Fprintf`, `strconv.FormatFloat`, `strconv.FormatBool`, `os.Exit` — all work correctly.
+- **840 tests still passing** (no regressions)
+#### Next Steps
+- Phase 36: more fmt verbs (%f, %e, %g for floats; %b, %o, %x for ints), additional runtime improvements
+
+### Session 35 - Phase 35: os.File.Read/Write/Seek, os.Rename, Builder.WriteString fix (2026-03-02)
+#### Completed
+- **`os.File.Read(b []byte) (int, error)`** — `golangc_os_file_read(f, slice_header)` using `fread`; runtime in `os_file.cpp`; sema stub method added to `os.File` NamedType; IR gen emits call + `(int, nil_err)` tuple
+- **`os.File.Write(b []byte) (int, error)`** — `golangc_os_file_write(f, slice_header)` using `fwrite`; same pattern as Read
+- **`os.File.Seek(offset int64, whence int) (int64, error)`** — `golangc_os_file_seek(f, offset, whence)` using `_fseeki64`/`_ftelli64` on MSVC; returns new offset + nil_err
+- **`os.Rename(oldpath, newpath string) error`** — `golangc_os_rename` using `std::rename`; sema `OsRename` BuiltinId added; IR gen dispatches inline nil_err return
+- **`strings.Builder.WriteString` returns `(int, error)`** — sema ret_kind changed from 0→3 (was void, now `(int, error)`); IR gen calls runtime then assembles `(StringLen(s), nil_err)` tuple; discarding the return still works
+- **Universe fix** — added `Read`, `Write`, `Seek` stub methods to `os.File` NamedType so `lookup_method()` finds them and `check_selector` enters the dispatch block
+- **13 new Phase35Test tests** (OsFileRead/Write/Seek compile+emit, OsRename compile+emit, BuilderWriteString return, discard, combined, GoFull) — all pass
+- **840 total tests passing** (30+89+87+110+101+423)
+#### Next Steps
+- Phase 36: more fmt verbs (%f, %e, %g for floats; %b, %o, %x for ints), fmt.Stringer auto-dispatch via interface, strings.ReplaceAll improvements
+
+### Session 34 - Phase 34: IR Optimization Passes (2026-03-02)
+#### Completed
+- **`IRPass` + `PassManager`** — `src/ir/ir_pass.hpp`: `IRPass` base with `run(Module&) → bool`; `PassManager` fixed-point loop (max 10 iters); `run_default()` convenience: Mem2Reg→ConstFold→ConstProp→DCE
+- **`Mem2RegPass`** — promotes single-store scalar allocas: replaces Load uses with stored value, removes load/store/alloca. Conservative: multi-store, address-escaped, or struct allocas kept. Handles cross-block promotions iteratively.
+- **`ConstFoldPass`** — folds binary ops with all-ConstInt/ConstFloat operands at compile time. Handles int arith, float arith, bitwise, comparisons, unary ops (Neg/FNeg/BitNot/LogNot), conversions (ZExt/SExt/Trunc/SIToFP/FPToSI). Identity rules: `x+0→x`, `x-0→x`, `x*1→x`, `x*0→0`, `x&0→0`, etc.
+- **`ConstPropPass`** — builds id→ConstInst map, substitutes ConstInt/ConstFloat into operand slots (skips Store dest and Call args).
+- **`DCEPass`** — iterative live-set removal of unused pure instructions; unreachable block removal (zero-predecessor blocks, skipping entry).
+- **Type ownership fix** — `IRTypeMap::transfer_types_to(Module::types)` called at end of `generate()` so IR types outlive the generator when modules are used standalone (critical for tests).
+- **Integration** — `run_default` added to `src/driver/main.cpp` after IR gen; `tests/codegen/test_codegen.cpp` compile helper also runs passes.
+- **30 new IR pass tests** in `tests/ir/test_ir_passes.cpp` (ConstFold×8, ConstProp×5, Mem2Reg×7, DCE×6, Integration×4) — all pass.
+- **Updated 17 codegen tests** to use function params instead of constants (so operations survive folding) or adjusted assertions for optimized output. Also fixed pre-existing SwitchBasicInt/SwitchTagless `switch$merge` false assertions.
+- **827 total tests passing** (30+89+87+110+101+410)
+#### Next Steps
+- Phase 35: strings.Builder.WriteString return (int,error), more os.File methods, fmt formatting improvements
+
+### Session 33 - Phase 33: Parser fix, fmt.Printf Stringer, os.Stat/IsNotExist (2026-03-02)
+#### Completed
+- **Parser fix: `[]T{...}` as call argument** — `parse_call_expr` now checks if next token after `parse_type()` is `LBrace`; if so, calls `parse_composite_lit(type)` instead of wrapping as empty type-carrier. Covers `[]byte{65,66}`, `[]int{1,2,3}`, `[]string{"a","b"}` passed directly to functions.
+- **`fmt.Printf` Stringer dispatch** — copied Named-type `.String()` detection loop from `fmt.Sprintf` block into `fmt.Printf` block in `ir_gen_expr.cpp`; now calls `TypeName$String(recv)` when arg has a String() method.
+- **`os.Stat(name) (*os.FileInfo, error)`** — opaque `golangc_file_info` struct with name[512], size, is_dir, err_code fields; `golangc_os_stat` uses `GetFileAttributesExA`; error interface extracted via `golangc_os_stat_error` (returns nil interface on err_code==0, non-nil error on failure)
+- **`os.IsNotExist(err) bool`** — `golangc_os_is_not_exist` takes large-struct-by-pointer (Windows x64 ABI); checks type_tag==0 (nil=false) and error message for "not found" substring
+- **`fi.Name() string`**, **`fi.Size() int64`**, **`fi.IsDir() bool`** — `golangc_file_info_name/size/is_dir` accessors; `os.FileInfo` opaque named type registered in universe; method calls type-checked via checker_expr.cpp
+- New sema types: `os_file_info_ptr_type()` accessor, `g_os_file_info_ptr_type` singleton
+- New BuiltinIds: `OsStat`, `OsIsNotExist`, `OsFileInfoName`, `OsFileInfoSize`, `OsFileInfoIsDir`
+- Added 14 `Phase33Test` tests (14/14 pass)
+- 393 codegen tests, 780 total — all 6 test suites pass
+#### Next Steps
+- `strings.Builder.WriteString` return `(int, error)` correctly (currently void)
+- More `os.File` methods: `f.Read`, `f.Write`, `f.Seek`
+- `fmt.Println/Printf` with `%v` formatting improvements
+- Goroutine stack improvements
 
 ### Session 32 - Phase 32: os.WriteFile/Remove/Mkdir, strings.NewReader, filepath, fmt.Sprintf Stringer (2026-03-01)
 #### Completed

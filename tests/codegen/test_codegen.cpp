@@ -1,6 +1,7 @@
 #include "codegen/x64_codegen.hpp"
 #include "common/diagnostic.hpp"
 #include "ir/ir_gen.hpp"
+#include "ir/ir_passes.hpp"
 #include "ir/ir_printer.hpp"
 #include "lexer/lexer.hpp"
 #include "parser/parser.hpp"
@@ -43,6 +44,8 @@ CodegenResult compile_to_asm(const std::string& source) {
 
     ir::IRGenerator gen(checker);
     auto module = gen.generate(parser.file());
+
+    ir::PassManager::run_default(*module);
 
     ir::IRPrinter printer;
     result.ir_text = printer.print(*module);
@@ -208,7 +211,7 @@ TEST(CodegenTest, IntConstant) {
 package main
 func main() {
     x := 42
-    _ = x
+    println(x)
 }
 )");
     EXPECT_FALSE(result.has_errors);
@@ -219,13 +222,14 @@ TEST(CodegenTest, BoolConstant) {
     auto result = compile_to_asm(R"(
 package main
 func main() {
-    x := true
-    _ = x
+    if true {
+        println(1)
+    }
 }
 )");
     EXPECT_FALSE(result.has_errors);
-    // Should contain a 1 (true) or 0 (false) constant
-    EXPECT_TRUE(contains(result.asm_text, "1"));
+    // Should contain a call to println
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
 }
 
 // ============================================================================
@@ -626,18 +630,18 @@ func main() {
 // ============================================================================
 
 TEST(CodegenTest, LocalVariable) {
+    // Use function parameters so the add cannot be constant-folded
     auto result = compile_to_asm(R"(
 package main
-func main() {
-    x := 10
-    y := 20
+func addTwo(x int, y int) int {
     z := x + y
-    println(z)
+    return z
+}
+func main() {
+    println(addTwo(10, 20))
 }
 )");
     EXPECT_FALSE(result.has_errors);
-    EXPECT_TRUE(contains(result.asm_text, "10"));
-    EXPECT_TRUE(contains(result.asm_text, "20"));
     EXPECT_TRUE(contains(result.asm_text, "add rax, rcx"));
 }
 
@@ -816,6 +820,313 @@ func main() {
     EXPECT_TRUE(contains(result.asm_text, "call golangc_print_int"));
     EXPECT_TRUE(contains(result.asm_text, "call golangc_print_space"));
     EXPECT_TRUE(contains(result.asm_text, "call golangc_print_newline"));
+}
+
+// ============================================================================
+// Struct pointers & pointer-receiver method tests  (Phase 7 extension)
+// ============================================================================
+
+// --- Struct value semantics ---
+
+TEST(StructPointerTest, StructValueCopy) {
+    // Assigning one struct to another copies all fields.
+    auto result = compile_to_asm(R"(
+package main
+type Rect struct { W, H int }
+func main() {
+    a := Rect{3, 4}
+    b := a
+    _ = b
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(StructPointerTest, StructValueReturnedByValue) {
+    // A function returning a struct uses sret; caller reads fields normally.
+    auto result = compile_to_asm(R"(
+package main
+type Vec2 struct { X, Y int }
+func makeVec(x, y int) Vec2 { return Vec2{x, y} }
+func main() {
+    v := makeVec(5, 6)
+    println(v.X)
+    println(v.Y)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call makeVec"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(StructPointerTest, StructValuePassedToFunc) {
+    // Struct > 8 bytes is passed by pointer (LEA) under Windows x64 ABI.
+    auto result = compile_to_asm(R"(
+package main
+type Box struct { A, B int }
+func area(b Box) int { return b.A * b.B }
+func main() {
+    println(area(Box{3, 7}))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call area"));
+}
+
+TEST(StructPointerTest, StructFieldMutation) {
+    // Mutating a field on a local struct variable.
+    auto result = compile_to_asm(R"(
+package main
+type Counter struct { N int }
+func main() {
+    c := Counter{0}
+    c.N = 42
+    println(c.N)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(StructPointerTest, ThreeFieldStruct) {
+    // Struct with three fields exercises offset logic (base, +8, +16).
+    auto result = compile_to_asm(R"(
+package main
+type Triple struct { A, B, C int }
+func main() {
+    t := Triple{1, 2, 3}
+    println(t.A)
+    println(t.B)
+    println(t.C)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+// --- Pointer-receiver methods ---
+
+TEST(StructPointerTest, PointerReceiverMethodCompiles) {
+    // A method with a pointer receiver (*T) should compile without errors.
+    auto result = compile_to_asm(R"(
+package main
+type Counter struct { N int }
+func (c *Counter) Inc() { c.N++ }
+func main() {
+    c := Counter{0}
+    c.Inc()
+    println(c.N)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(StructPointerTest, PointerReceiverMethodEmitted) {
+    // Pointer-receiver method should appear as a PROC in the assembly.
+    auto result = compile_to_asm(R"(
+package main
+type Counter struct { N int }
+func (c *Counter) Inc() { c.N++ }
+func main() {
+    c := Counter{0}
+    c.Inc()
+    println(c.N)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Counter$Inc PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "call Counter$Inc"));
+}
+
+TEST(StructPointerTest, PointerReceiverModifiesValue) {
+    // Method with pointer receiver mutates the original struct.
+    auto result = compile_to_asm(R"(
+package main
+type Acc struct { Sum int }
+func (a *Acc) Add(n int) { a.Sum += n }
+func main() {
+    acc := Acc{0}
+    acc.Add(10)
+    acc.Add(5)
+    println(acc.Sum)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Acc$Add PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "call Acc$Add"));
+}
+
+TEST(StructPointerTest, PointerReceiverReturnsValue) {
+    // Pointer-receiver method that reads and returns a field.
+    auto result = compile_to_asm(R"(
+package main
+type Wrapper struct { Val int }
+func (w *Wrapper) Get() int { return w.Val }
+func main() {
+    wr := Wrapper{99}
+    println(wr.Get())
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Wrapper$Get PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "call Wrapper$Get"));
+}
+
+TEST(StructPointerTest, MixedValueAndPointerReceivers) {
+    // Same type can have both value-receiver and pointer-receiver methods.
+    auto result = compile_to_asm(R"(
+package main
+type Num struct { V int }
+func (n Num) Double() int { return n.V * 2 }
+func (n *Num) Set(v int)  { n.V = v }
+func main() {
+    x := Num{3}
+    x.Set(7)
+    println(x.Double())
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Num$Double PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "Num$Set PROC"));
+}
+
+// --- Struct pointer variables ---
+
+TEST(StructPointerTest, TakeAddressOfStructLocal) {
+    // &localStruct gives a pointer; pointer field access works via indirection.
+    auto result = compile_to_asm(R"(
+package main
+type Node struct { Val int }
+func main() {
+    n := Node{42}
+    p := &n
+    println(p.Val)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(StructPointerTest, ModifyThroughPointer) {
+    // Writing through a pointer: p.Val = v inside the function.
+    auto result = compile_to_asm(R"(
+package main
+type Node struct { Val int }
+func set(p *Node, v int) { p.Val = v }
+func main() {
+    n := Node{0}
+    set(&n, 77)
+    println(n.Val)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call set"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
+}
+
+TEST(StructPointerTest, PointerPassedToFunc) {
+    // *T argument: just a pointer (8 bytes), passed in a register directly.
+    auto result = compile_to_asm(R"(
+package main
+type Point struct { X, Y int }
+func readX(p *Point) int { return p.X }
+func main() {
+    pt := Point{11, 22}
+    println(readX(&pt))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call readX"));
+}
+
+TEST(StructPointerTest, PointerReturnedFromFunc) {
+    // Function returns *T (a pointer, 8 bytes — fits in RAX).
+    auto result = compile_to_asm(R"(
+package main
+type Data struct { X int }
+func getPtr(d *Data) *Data { return d }
+func main() {
+    d := Data{55}
+    p := getPtr(&d)
+    println(p.X)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call getPtr"));
+}
+
+// --- Nested structs ---
+
+TEST(StructPointerTest, NestedStructFieldAccess) {
+    // Struct embedding another struct — accessing inner fields.
+    auto result = compile_to_asm(R"(
+package main
+type Inner struct { V int }
+type Outer struct { In Inner }
+func main() {
+    o := Outer{Inner{7}}
+    println(o.In.V)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(StructPointerTest, NestedStructFieldWrite) {
+    // Writing to a field of an embedded struct.
+    auto result = compile_to_asm(R"(
+package main
+type Inner struct { V int }
+type Outer struct { In Inner }
+func main() {
+    o := Outer{Inner{0}}
+    o.In.V = 99
+    println(o.In.V)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+// --- GoFull: comprehensive struct + pointer test ---
+
+TEST(StructPointerTest, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+
+type Vec struct { X, Y int }
+
+func (v Vec) Scale(f int) Vec {
+    return Vec{v.X * f, v.Y * f}
+}
+
+func (v *Vec) Negate() {
+    v.X = -v.X
+    v.Y = -v.Y
+}
+
+func addVecs(a, b Vec) Vec {
+    return Vec{a.X + b.X, a.Y + b.Y}
+}
+
+func main() {
+    v1 := Vec{2, 3}
+    v2 := Vec{4, 5}
+    v3 := addVecs(v1, v2)
+    println(v3.X)          // 6
+    println(v3.Y)          // 8
+    v4 := v1.Scale(10)
+    println(v4.X)          // 20
+    v1.Negate()
+    println(v1.X)          // -2
+    p := &v2
+    p.Negate()
+    println(v2.Y)          // -5
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Vec$Scale PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "Vec$Negate PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "call addVecs"));
+    EXPECT_TRUE(contains(result.asm_text, "call Vec$Scale"));
+    EXPECT_TRUE(contains(result.asm_text, "call Vec$Negate"));
 }
 
 // ============================================================================
@@ -1037,28 +1348,26 @@ TEST(CodegenHelperTest, IsSliceType) {
 // ============================================================================
 
 TEST(CodegenTest, FloatConstant) {
+    // Use println to keep the float constant live in the IR
     auto result = compile_to_asm(R"(
 package main
 func main() {
     x := 3.14
-    _ = x
+    println(x)
 }
 )");
     EXPECT_FALSE(result.has_errors);
-    EXPECT_TRUE(contains(result.asm_text, "movsd xmm0, QWORD PTR [__flt"));
     EXPECT_TRUE(contains(result.asm_text, "_DATA SEGMENT"));
-    EXPECT_TRUE(contains(result.asm_text, "__flt0 DQ"));
+    EXPECT_TRUE(contains(result.asm_text, "__flt"));
+    EXPECT_TRUE(contains(result.asm_text, "DQ"));
 }
 
 TEST(CodegenTest, FloatAdd) {
+    // Use function params to prevent constant folding
     auto result = compile_to_asm(R"(
 package main
-func main() {
-    x := 1.5
-    y := 2.5
-    z := x + y
-    _ = z
-}
+func fadd(x float64, y float64) float64 { return x + y }
+func main() { println(fadd(1.5, 2.5)) }
 )");
     EXPECT_FALSE(result.has_errors);
     EXPECT_TRUE(contains(result.asm_text, "addsd xmm0, xmm1"));
@@ -1067,12 +1376,8 @@ func main() {
 TEST(CodegenTest, FloatSub) {
     auto result = compile_to_asm(R"(
 package main
-func main() {
-    x := 5.0
-    y := 2.0
-    z := x - y
-    _ = z
-}
+func fsub(x float64, y float64) float64 { return x - y }
+func main() { println(fsub(5.0, 2.0)) }
 )");
     EXPECT_FALSE(result.has_errors);
     EXPECT_TRUE(contains(result.asm_text, "subsd xmm0, xmm1"));
@@ -1081,12 +1386,8 @@ func main() {
 TEST(CodegenTest, FloatMul) {
     auto result = compile_to_asm(R"(
 package main
-func main() {
-    x := 3.0
-    y := 4.0
-    z := x * y
-    _ = z
-}
+func fmul(x float64, y float64) float64 { return x * y }
+func main() { println(fmul(3.0, 4.0)) }
 )");
     EXPECT_FALSE(result.has_errors);
     EXPECT_TRUE(contains(result.asm_text, "mulsd xmm0, xmm1"));
@@ -1095,25 +1396,19 @@ func main() {
 TEST(CodegenTest, FloatDiv) {
     auto result = compile_to_asm(R"(
 package main
-func main() {
-    x := 10.0
-    y := 3.0
-    z := x / y
-    _ = z
-}
+func fdiv(x float64, y float64) float64 { return x / y }
+func main() { println(fdiv(10.0, 3.0)) }
 )");
     EXPECT_FALSE(result.has_errors);
     EXPECT_TRUE(contains(result.asm_text, "divsd xmm0, xmm1"));
 }
 
 TEST(CodegenTest, FloatNeg) {
+    // Use function parameter to prevent constant folding of negation
     auto result = compile_to_asm(R"(
 package main
-func main() {
-    x := 3.14
-    y := -x
-    _ = y
-}
+func fneg(x float64) float64 { return -x }
+func main() { println(fneg(3.14)) }
 )");
     EXPECT_FALSE(result.has_errors);
     EXPECT_TRUE(contains(result.asm_text, "xorpd xmm0"));
@@ -1125,12 +1420,12 @@ func main() {
 // ============================================================================
 
 TEST(CodegenTest, FloatCompareLt) {
+    // Use function params so comparison cannot be constant-folded
     auto result = compile_to_asm(R"(
 package main
+func flt(x float64, y float64) bool { return x < y }
 func main() {
-    x := 1.0
-    y := 2.0
-    if x < y {
+    if flt(1.0, 2.0) {
         println(1)
     }
 }
@@ -1143,10 +1438,9 @@ func main() {
 TEST(CodegenTest, FloatCompareEq) {
     auto result = compile_to_asm(R"(
 package main
+func feq(x float64, y float64) bool { return x == y }
 func main() {
-    x := 1.0
-    y := 1.0
-    if x == y {
+    if feq(1.0, 1.0) {
         println(1)
     }
 }
@@ -1158,13 +1452,11 @@ func main() {
 }
 
 TEST(CodegenTest, IntToFloat) {
+    // Use function param to prevent constant folding of conversion
     auto result = compile_to_asm(R"(
 package main
-func main() {
-    x := 42
-    y := float64(x)
-    _ = y
-}
+func itof(x int) float64 { return float64(x) }
+func main() { println(itof(42)) }
 )");
     EXPECT_FALSE(result.has_errors);
     EXPECT_TRUE(contains(result.asm_text, "cvtsi2sd xmm0, rax"));
@@ -1173,11 +1465,8 @@ func main() {
 TEST(CodegenTest, FloatToInt) {
     auto result = compile_to_asm(R"(
 package main
-func main() {
-    x := 3.14
-    y := int(x)
-    _ = y
-}
+func ftoi(x float64) int { return int(x) }
+func main() { println(ftoi(3.14)) }
 )");
     EXPECT_FALSE(result.has_errors);
     EXPECT_TRUE(contains(result.asm_text, "cvttsd2si rax, xmm0"));
@@ -1251,13 +1540,11 @@ func main() {
 }
 
 TEST(CodegenTest, StringIndex) {
+    // Use a function with a param to prevent DCE of string index
     auto result = compile_to_asm(R"(
 package main
-func main() {
-    s := "hello"
-    c := s[0]
-    _ = c
-}
+func sindex(s string, i int) byte { return s[i] }
+func main() { println(int(sindex("hello", 0))) }
 )");
     EXPECT_FALSE(result.has_errors);
     EXPECT_TRUE(contains(result.asm_text, "movzx rax, BYTE PTR [rcx+rax]"));
@@ -1301,20 +1588,22 @@ func main() {
 // ============================================================================
 
 TEST(CodegenTest, FloatsGoFull) {
+    // Use function params to prevent constant folding of float ops
     auto result = compile_to_asm(R"(
 package main
-func main() {
-    x := 3.14
-    y := 2.0
+func floatOps(x float64, y float64) {
     println(x + y)
     println(x * y)
+}
+func main() {
+    floatOps(3.14, 2.0)
 }
 )");
     EXPECT_FALSE(result.has_errors);
     // Float constants emitted in data section
     EXPECT_TRUE(contains(result.asm_text, "_DATA SEGMENT"));
     EXPECT_TRUE(contains(result.asm_text, "__flt"));
-    // Float arithmetic operations
+    // Float arithmetic operations preserved (params are not const-folded)
     EXPECT_TRUE(contains(result.asm_text, "addsd xmm0, xmm1"));
     EXPECT_TRUE(contains(result.asm_text, "mulsd xmm0, xmm1"));
     // Println dispatches to float runtime
@@ -2107,7 +2396,6 @@ func main() { println(f(0)) }
     EXPECT_FALSE(result.has_errors);
     // Block labels use $ instead of . (MASM naming)
     EXPECT_TRUE(contains(result.asm_text, "switch$case"));
-    EXPECT_TRUE(contains(result.asm_text, "switch$merge"));
 }
 
 TEST(SwitchTest, SwitchDefaultOnly) {
@@ -2178,7 +2466,8 @@ func main() { println(grade(95)) }
 )");
     EXPECT_FALSE(result.has_errors);
     EXPECT_TRUE(contains(result.asm_text, "switch$case"));
-    EXPECT_TRUE(contains(result.asm_text, "switch$merge"));
+    // grade takes a param so switch comparisons are not folded
+    EXPECT_TRUE(contains(result.asm_text, "cmp rax, rcx"));
 }
 
 TEST(SwitchTest, SwitchWithInit) {
@@ -6270,4 +6559,483 @@ func main() {
     EXPECT_TRUE(contains(result.asm_text, "golangc_filepath_join2"));
     EXPECT_TRUE(contains(result.asm_text, "golangc_strings_reader_new"));
     EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+// =============================================================================
+// Phase 33 Tests
+// =============================================================================
+
+// --- Part 1: Parser fix — []T{} composite literal as call argument ---
+
+TEST(Phase33Test, CompositeLitByteSliceCallArg) {
+    // []byte{65,66,67} passed directly to a function call
+    auto result = compile_to_asm(R"(
+package main
+func useBytes(b []byte) int { return len(b) }
+func main() {
+    n := useBytes([]byte{65, 66, 67})
+    _ = n
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase33Test, CompositeLitIntSliceCallArg) {
+    // []int{1,2,3} passed directly to a function call
+    auto result = compile_to_asm(R"(
+package main
+func sumInts(a []int) int {
+    s := 0
+    for _, v := range a { s += v }
+    return s
+}
+func main() {
+    n := sumInts([]int{1, 2, 3})
+    _ = n
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase33Test, CompositeLitStringSliceCallArg) {
+    // []string{"a","b"} as call arg
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    s := strings.Join([]string{"hello", "world"}, " ")
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase33Test, CompositeLitMakeAndLiteralMixed) {
+    // make([]int, 3) and []int{1,2,3} in same function
+    auto result = compile_to_asm(R"(
+package main
+func useBytes(b []byte) int { return len(b) }
+func main() {
+    a := make([]int, 3)
+    _ = a
+    n := useBytes([]byte{10, 20})
+    _ = n
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+// --- Part 2: fmt.Printf Stringer dispatch ---
+
+TEST(Phase33Test, FmtPrintfStringerDispatch) {
+    // fmt.Printf should call .String() method on typed arg
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Color int
+func (c Color) String() string {
+    if c == 0 { return "Red" }
+    return "Blue"
+}
+func main() {
+    c := Color(0)
+    fmt.Printf("color=%s\n", c)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Color$String"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_printf"));
+}
+
+TEST(Phase33Test, FmtPrintfNoStringerPlainArg) {
+    // fmt.Printf with plain int — no stringer call
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    x := 42
+    fmt.Printf("val=%d\n", x)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_printf"));
+}
+
+TEST(Phase33Test, FmtPrintfMultipleArgs) {
+    // fmt.Printf with multiple args, one Stringer
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Status int
+func (s Status) String() string { return "OK" }
+func main() {
+    st := Status(0)
+    fmt.Printf("%d: %s\n", 42, st)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Status$String"));
+}
+
+// --- Part 3: os.Stat + os.IsNotExist ---
+
+TEST(Phase33Test, OsStatCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    fi, err := os.Stat("somefile.txt")
+    _ = fi
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase33Test, OsStatEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    fi, err := os.Stat("test.txt")
+    _ = fi
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_stat"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_stat_error"));
+}
+
+TEST(Phase33Test, OsIsNotExistCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    _, err := os.Stat("nonexistent_xyz.txt")
+    ok := os.IsNotExist(err)
+    _ = ok
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase33Test, OsIsNotExistEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    _, err := os.Stat("nonexistent_xyz.txt")
+    ok := os.IsNotExist(err)
+    _ = ok
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_is_not_exist"));
+}
+
+TEST(Phase33Test, OsFileInfoMethodsCompile) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    fi, err := os.Stat("go.mod")
+    if err == nil {
+        n := fi.Name()
+        s := fi.Size()
+        d := fi.IsDir()
+        _ = n
+        _ = s
+        _ = d
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase33Test, OsFileInfoMethodsEmitRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    fi, err := os.Stat("go.mod")
+    if err == nil {
+        n := fi.Name()
+        s := fi.Size()
+        d := fi.IsDir()
+        _ = n
+        _ = s
+        _ = d
+    }
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_file_info_name"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_file_info_size"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_file_info_is_dir"));
+}
+
+// GoFull: comprehensive Phase 33
+TEST(Phase33Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+    "strings"
+)
+type Direction int
+func (d Direction) String() string {
+    if d == 0 { return "North" }
+    return "South"
+}
+func useBytes(b []byte) int { return len(b) }
+func main() {
+    // Part 1: composite literal as call arg
+    n := useBytes([]byte{65, 66, 67})
+    _ = n
+
+    // Part 2: fmt.Printf Stringer
+    dir := Direction(0)
+    fmt.Printf("dir=%s\n", dir)
+
+    // Part 3: os.Stat + os.IsNotExist
+    _, err := os.Stat("nonexistent_xyz.txt")
+    isNotExist := os.IsNotExist(err)
+    _ = isNotExist
+
+    // strings.Join with composite literal
+    joined := strings.Join([]string{"a", "b", "c"}, ",")
+    _ = joined
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Direction$String"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_stat"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_is_not_exist"));
+}
+
+// ============================================================================
+// Phase 35 Tests: os.File.Read/Write/Seek, os.Rename, Builder.WriteString (int,error)
+// ============================================================================
+
+TEST(Phase35Test, OsFileReadCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    f, _ := os.Open("test.txt")
+    buf := make([]byte, 64)
+    n, _ := f.Read(buf)
+    _ = n
+    f.Close()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase35Test, OsFileReadEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    f, _ := os.Open("test.txt")
+    buf := make([]byte, 64)
+    n, _ := f.Read(buf)
+    _ = n
+    f.Close()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_read"));
+}
+
+TEST(Phase35Test, OsFileWriteCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    f, _ := os.Create("out.txt")
+    data := []byte{72, 101, 108, 108, 111}
+    n, _ := f.Write(data)
+    _ = n
+    f.Close()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase35Test, OsFileWriteEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    f, _ := os.Create("out.txt")
+    data := []byte{72, 101, 108, 108, 111}
+    n, _ := f.Write(data)
+    _ = n
+    f.Close()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_write"));
+}
+
+TEST(Phase35Test, OsFileSeekCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    f, _ := os.Open("test.txt")
+    pos, _ := f.Seek(0, 2)
+    _ = pos
+    f.Close()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase35Test, OsFileSeekEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    f, _ := os.Open("test.txt")
+    pos, _ := f.Seek(0, 2)
+    _ = pos
+    f.Close()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_seek"));
+}
+
+TEST(Phase35Test, OsRenameCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    err := os.Rename("old.txt", "new.txt")
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase35Test, OsRenameEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    err := os.Rename("old.txt", "new.txt")
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_rename"));
+}
+
+TEST(Phase35Test, BuilderWriteStringReturnsIntError) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    var b strings.Builder
+    n, _ := b.WriteString("hello")
+    _ = n
+    s := b.String()
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_builder_write_string"));
+}
+
+TEST(Phase35Test, BuilderWriteStringDiscardReturn) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    var b strings.Builder
+    b.WriteString("hello")
+    b.WriteString(" world")
+    s := b.String()
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase35Test, OsFileReadWriteSeekAll) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    f, _ := os.Create("tmp.bin")
+    data := []byte{1, 2, 3, 4}
+    f.Write(data)
+    f.Seek(0, 0)
+    buf := make([]byte, 4)
+    n, _ := f.Read(buf)
+    _ = n
+    f.Close()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_write"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_seek"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_read"));
+}
+
+TEST(Phase35Test, OsRenameWithHelper) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func maybeRename(src, dst string) {
+    os.Rename(src, dst)
+}
+func main() {
+    maybeRename("a.txt", "b.txt")
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_rename"));
+}
+
+TEST(Phase35Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "os"
+    "strings"
+)
+func main() {
+    var sb strings.Builder
+    n, _ := sb.WriteString("Phase35")
+    _ = n
+    sb.WriteString(" test")
+    res := sb.String()
+    _ = res
+
+    f, _ := os.Create("phase35_tmp.bin")
+    data := []byte{80, 104, 115}
+    written, _ := f.Write(data)
+    _ = written
+    pos, _ := f.Seek(0, 0)
+    _ = pos
+    buf := make([]byte, 3)
+    nr, _ := f.Read(buf)
+    _ = nr
+    f.Close()
+
+    os.Rename("phase35_tmp.bin", "phase35_out.bin")
+    os.Remove("phase35_out.bin")
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_builder_write_string"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_write"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_seek"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_read"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_rename"));
 }

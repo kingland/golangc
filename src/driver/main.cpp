@@ -2,6 +2,7 @@
 #include "codegen/x64_codegen.hpp"
 #include "common/diagnostic.hpp"
 #include "ir/ir_gen.hpp"
+#include "ir/ir_passes.hpp"
 #include "ir/ir_printer.hpp"
 #include "lexer/lexer.hpp"
 #include "parser/parser.hpp"
@@ -219,6 +220,9 @@ int main(int argc, char* argv[]) {
 
     golangc::ir::IRGenerator gen(checker);
     auto module = gen.generate(parser.file());
+
+    // Run optimization passes
+    golangc::ir::PassManager::run_default(*module);
 
     if (dump_ir) {
         golangc::ir::IRPrinter printer;

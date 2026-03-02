@@ -2448,14 +2448,22 @@ Expr* Parser::parse_call_expr(Expr* func) {
         }
         if (is_type_arg) {
             auto* type = parse_type();
-            // Wrap the type in a CompositeLit with no elements — acts as type carrier
-            auto* te = make_expr(ExprKind::CompositeLit);
-            te->composite_lit.loc = type->location();
-            te->composite_lit.type = type;
-            te->composite_lit.elts = {};
-            te->composite_lit.lbrace = {};
-            te->composite_lit.rbrace = {};
-            args.push_back(te);
+            if (current_.kind == TokenKind::LBrace) {
+                // []byte{65, 66} — composite literal, not a type carrier
+                bool saved = allow_composite_lit_;
+                allow_composite_lit_ = true;
+                args.push_back(parse_composite_lit(type));
+                allow_composite_lit_ = saved;
+            } else {
+                // make([]int, 5) — pure type arg, wrap as empty carrier
+                auto* te = make_expr(ExprKind::CompositeLit);
+                te->composite_lit.loc = type->location();
+                te->composite_lit.type = type;
+                te->composite_lit.elts = {};
+                te->composite_lit.lbrace = {};
+                te->composite_lit.rbrace = {};
+                args.push_back(te);
+            }
         } else {
             args.push_back(parse_expr());
         }

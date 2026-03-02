@@ -171,6 +171,7 @@ enum class BuiltinId : int {
     // os extras
     OsWriteFile,            // os.WriteFile(name string, data []byte, perm int) error
     OsRemove,               // os.Remove(name string) error
+    OsRename,               // os.Rename(oldpath, newpath string) error
     OsMkdir,                // os.Mkdir(name string, perm int) error
     OsMkdirAll,             // os.MkdirAll(path string, perm int) error
     OsUserHomeDir,          // os.UserHomeDir() (string, error)
@@ -190,6 +191,13 @@ enum class BuiltinId : int {
     FilepathBase,           // filepath.Base(path string) string
     FilepathExt,            // filepath.Ext(path string) string
     FilepathAbs,            // filepath.Abs(path string) (string, error)
+    // os.Stat + os.IsNotExist
+    OsStat,                 // os.Stat(name string) (os.FileInfo, error)
+    OsIsNotExist,           // os.IsNotExist(err error) bool
+    // os.FileInfo methods (called on *os.FileInfo receiver)
+    OsFileInfoName,         // fi.Name() string
+    OsFileInfoSize,         // fi.Size() int64
+    OsFileInfoIsDir,        // fi.IsDir() bool
     // Sentinel
     Count
 };
@@ -235,6 +243,10 @@ enum class BuiltinId : int {
 /// Get the strings.Reader opaque pointer type (*strings.Reader).
 /// Returns nullptr until init_universe() has been called.
 [[nodiscard]] Type* strings_reader_ptr_type();
+
+/// Get the os.FileInfo opaque pointer type (*os.FileInfo).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* os_file_info_ptr_type();
 
 } // namespace sema
 } // namespace golangc

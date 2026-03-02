@@ -39,6 +39,9 @@ Type* g_bytes_buffer_ptr_type = nullptr;
 // Singleton strings.Reader pointer type (*strings.Reader)
 Type* g_strings_reader_ptr_type = nullptr;
 
+// Singleton os.FileInfo pointer type (*os.FileInfo)
+Type* g_os_file_info_ptr_type = nullptr;
+
 void ensure_basic_types_initialized() {
     if (g_basic_types_initialized) return;
     g_basic_types_initialized = true;
@@ -131,6 +134,10 @@ Type* bytes_buffer_ptr_type() {
 
 Type* strings_reader_ptr_type() {
     return g_strings_reader_ptr_type;
+}
+
+Type* os_file_info_ptr_type() {
+    return g_os_file_info_ptr_type;
 }
 
 Scope* init_universe(ArenaAllocator& arena) {
@@ -367,6 +374,9 @@ Scope* init_universe(ArenaAllocator& arena) {
     // Add stub methods so lookup_method() succeeds and check_selector enters if(method).
     file_named->methods.push_back(NamedType::Method{"Close",       void_ty, true});
     file_named->methods.push_back(NamedType::Method{"WriteString", void_ty, true});
+    file_named->methods.push_back(NamedType::Method{"Read",        void_ty, true});
+    file_named->methods.push_back(NamedType::Method{"Write",       void_ty, true});
+    file_named->methods.push_back(NamedType::Method{"Seek",        void_ty, true});
 
     auto* file_named_ty = arena.create<Type>();
     file_named_ty->kind = TypeKind::Named;
@@ -466,6 +476,28 @@ Scope* init_universe(ArenaAllocator& arena) {
     reader_ptr_ty->pointer.base = reader_named_ty;
 
     g_strings_reader_ptr_type = reader_ptr_ty;
+
+    // ---- os.FileInfo opaque named type ----
+    auto* fi_underlying = arena.create<Type>();
+    fi_underlying->kind = TypeKind::Basic;
+    fi_underlying->basic = BasicKind::Uintptr;
+
+    auto* fi_named = arena.create<NamedType>();
+    fi_named->name = "os.FileInfo";
+    fi_named->underlying = fi_underlying;
+    fi_named->methods.push_back(NamedType::Method{"Name",  void_ty, true});
+    fi_named->methods.push_back(NamedType::Method{"Size",  void_ty, true});
+    fi_named->methods.push_back(NamedType::Method{"IsDir", void_ty, true});
+
+    auto* fi_named_ty = arena.create<Type>();
+    fi_named_ty->kind = TypeKind::Named;
+    fi_named_ty->named = fi_named;
+
+    auto* fi_ptr_ty = arena.create<Type>();
+    fi_ptr_ty->kind = TypeKind::Pointer;
+    fi_ptr_ty->pointer.base = fi_named_ty;
+
+    g_os_file_info_ptr_type = fi_ptr_ty;
 
     return scope;
 }

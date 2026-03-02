@@ -53,6 +53,7 @@ add_library(golangc_ir STATIC
     ir/ir_gen_expr.cpp
     ir/ir_gen_stmt.cpp
     ir/ir_printer.cpp
+    ir/ir_passes.cpp
 )
 target_include_directories(golangc_ir PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(golangc_ir PUBLIC golangc_sema golangc_ast golangc_common)

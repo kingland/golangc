@@ -7,11 +7,11 @@
 
 extern "C" {
 
-double golangc_parse_float(const char* ptr, int64_t len) {
-    if (!ptr || len <= 0) return 0.0;
+double golangc_parse_float(const GoString* s) {
+    if (!s || !s->ptr || s->len <= 0) return 0.0;
     char buf[64];
-    int64_t n = len < 63 ? len : 63;
-    memcpy(buf, ptr, static_cast<size_t>(n));
+    int64_t n = s->len < 63 ? s->len : 63;
+    memcpy(buf, s->ptr, static_cast<size_t>(n));
     buf[n] = '\0';
     return strtod(buf, nullptr);
 }
@@ -28,11 +28,11 @@ void golangc_format_float(char* sret_out, double value) {
     *reinterpret_cast<int64_t*>(sret_out + 8) = static_cast<int64_t>(len);
 }
 
-int64_t golangc_parse_bool(const char* ptr, int64_t len) {
-    if (!ptr || len <= 0) return 0;
+int64_t golangc_parse_bool(const GoString* s) {
+    if (!s || !s->ptr || s->len <= 0) return 0;
     char buf[8];
-    int64_t n = len < 7 ? len : 7;
-    memcpy(buf, ptr, static_cast<size_t>(n));
+    int64_t n = s->len < 7 ? s->len : 7;
+    memcpy(buf, s->ptr, static_cast<size_t>(n));
     buf[n] = '\0';
     return (strcmp(buf, "1") == 0 || strcmp(buf, "t") == 0 || strcmp(buf, "T") == 0 ||
             strcmp(buf, "true") == 0 || strcmp(buf, "TRUE") == 0 || strcmp(buf, "True") == 0) ? 1 : 0;

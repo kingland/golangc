@@ -79,8 +79,7 @@ int64_t golangc_fmt_scanln(int64_t n, ...) {
     return r;
 }
 
-int64_t golangc_fmt_scanf(const char* /*fmt_ptr*/, int64_t /*fmt_len*/,
-                           int64_t n, ...) {
+int64_t golangc_fmt_scanf(const GoString* /*fmt*/, int64_t n, ...) {
     // Simplified: ignore format string, scan by type tags (same as Scan).
     va_list ap;
     va_start(ap, n);
@@ -133,8 +132,10 @@ static int64_t sscan_items(const char* src, int64_t n, va_list ap) {
     return count;
 }
 
-int64_t golangc_fmt_sscan(const char* str_ptr, int64_t str_len, int64_t n, ...) {
+int64_t golangc_fmt_sscan(const GoString* str_gs, int64_t n, ...) {
     // Null-terminate a local copy
+    const char* str_ptr = str_gs ? str_gs->ptr : "";
+    int64_t str_len     = str_gs ? str_gs->len : 0;
     char buf[65536];
     int64_t copy_len = str_len < 65535 ? str_len : 65535;
     memcpy(buf, str_ptr, static_cast<size_t>(copy_len));
@@ -147,10 +148,10 @@ int64_t golangc_fmt_sscan(const char* str_ptr, int64_t str_len, int64_t n, ...) 
     return r;
 }
 
-int64_t golangc_fmt_sscanf(const char* str_ptr, int64_t str_len,
-                             const char* /*fmt_ptr*/, int64_t /*fmt_len*/,
-                             int64_t n, ...) {
+int64_t golangc_fmt_sscanf(const GoString* str_gs, const GoString* /*fmt*/, int64_t n, ...) {
     // Simplified: ignore format string, scan by type tags.
+    const char* str_ptr = str_gs ? str_gs->ptr : "";
+    int64_t str_len     = str_gs ? str_gs->len : 0;
     char buf[65536];
     int64_t copy_len = str_len < 65535 ? str_len : 65535;
     memcpy(buf, str_ptr, static_cast<size_t>(copy_len));

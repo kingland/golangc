@@ -15,6 +15,9 @@ std::unique_ptr<Module> IRGenerator::generate(ast::File* file) {
 
     gen_file(file);
 
+    // Transfer IR type ownership to the module so types outlive the generator.
+    type_map_.transfer_types_to(mod->types);
+
     return mod;
 }
 

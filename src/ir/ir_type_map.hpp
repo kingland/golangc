@@ -48,6 +48,10 @@ public:
     /// Create an array type (element type × count).
     [[nodiscard]] IRType* make_array_type(IRType* elem, int64_t count);
 
+    /// Transfer ownership of all created types to the destination vector.
+    /// After this call, the type map no longer owns the types.
+    void transfer_types_to(std::vector<std::unique_ptr<IRType>>& dest);
+
 private:
     // Owned types
     std::vector<std::unique_ptr<IRType>> owned_types_;

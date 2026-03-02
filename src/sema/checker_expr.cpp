@@ -557,6 +557,11 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
             info.type = error_type();
             return info;
         }
+        if (sel == "Rename") {
+            info.symbol = make_member_builtin(BuiltinId::OsRename);
+            info.type = error_type();
+            return info;
+        }
         if (sel == "Mkdir") {
             info.symbol = make_member_builtin(BuiltinId::OsMkdir);
             info.type = error_type();
@@ -575,6 +580,16 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
         if (sel == "TempDir") {
             info.symbol = make_member_builtin(BuiltinId::OsTempDir);
             info.type = basic_type(BasicKind::String);
+            return info;
+        }
+        if (sel == "Stat") {
+            info.symbol = make_member_builtin(BuiltinId::OsStat);
+            info.type = make_tuple_type({os_file_info_ptr_type(), error_type()});
+            return info;
+        }
+        if (sel == "IsNotExist") {
+            info.symbol = make_member_builtin(BuiltinId::OsIsNotExist);
+            info.type = basic_type(BasicKind::Bool);
             return info;
         }
     }
@@ -848,10 +863,11 @@ ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
             base->named->name == "strings.Builder") {
             auto* str_ret  = basic_type(BasicKind::String);
             auto* int_ret  = basic_type(BasicKind::Int);
+            // ret: 0=void/nil, 1=str, 2=int, 3=(int,error)
             static const struct {
-                std::string_view sel; BuiltinId id; int ret; // 0=void,1=str,2=int
+                std::string_view sel; BuiltinId id; int ret;
             } builder_map[] = {
-                {"WriteString", BuiltinId::StringsBuilderWriteString, 0},
+                {"WriteString", BuiltinId::StringsBuilderWriteString, 3},
                 {"WriteByte",   BuiltinId::StringsBuilderWriteByte,   0},
                 {"String",      BuiltinId::StringsBuilderString,      1},
                 {"Reset",       BuiltinId::StringsBuilderReset,        0},
@@ -869,9 +885,10 @@ ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
                     std::memcpy(stored, full.data(), full.size() + 1);
                     sym->name = std::string_view(stored, full.size());
                     info.symbol = sym;
-                    info.type = bm.ret == 1 ? str_ret
-                               : bm.ret == 2 ? int_ret
-                                             : nullptr;
+                    if (bm.ret == 1) info.type = str_ret;
+                    else if (bm.ret == 2) info.type = int_ret;
+                    else if (bm.ret == 3) info.type = make_tuple_type({int_ret, error_type()});
+                    else info.type = nullptr;
                     info.needs_addr_for_recv = false;
                     return info;
                 }
@@ -911,11 +928,16 @@ ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
         if (base->kind == TypeKind::Named && base->named &&
             base->named->name == "os.File") {
             auto* int_ret  = basic_type(BasicKind::Int);
+            auto* i64_ret  = basic_type(BasicKind::Int64);
+            // ret_kind: 0=error, 1=(int,error), 2=(int64,error)
             static const struct {
-                std::string_view sel; BuiltinId id; bool returns_int;
+                std::string_view sel; BuiltinId id; int ret_kind;
             } file_map[] = {
-                {"Close",       BuiltinId::OsFileClose,       false},
-                {"WriteString", BuiltinId::OsFileWriteString, true},
+                {"Close",       BuiltinId::OsFileClose,       0},
+                {"WriteString", BuiltinId::OsFileWriteString, 1},
+                {"Read",        BuiltinId::OsFileRead,        1},
+                {"Write",       BuiltinId::OsFileWrite,       1},
+                {"Seek",        BuiltinId::OsFileSeek,        2},
             };
             for (const auto& fm : file_map) {
                 if (sel_name == fm.sel) {
@@ -928,10 +950,42 @@ ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
                     std::memcpy(stored, full.data(), full.size() + 1);
                     sym->name = std::string_view(stored, full.size());
                     info.symbol = sym;
-                    if (fm.returns_int)
+                    if (fm.ret_kind == 1)
                         info.type = make_tuple_type({int_ret, error_type()});
+                    else if (fm.ret_kind == 2)
+                        info.type = make_tuple_type({i64_ret, error_type()});
                     else
                         info.type = error_type();
+                    info.needs_addr_for_recv = false;
+                    return info;
+                }
+            }
+        }
+
+        // os.FileInfo methods: expose as builtin symbols for IR dispatch.
+        if (base->kind == TypeKind::Named && base->named &&
+            base->named->name == "os.FileInfo") {
+            auto* str_ret  = basic_type(BasicKind::String);
+            auto* i64_ret  = basic_type(BasicKind::Int64);
+            auto* bool_ret = basic_type(BasicKind::Bool);
+            struct FileInfoMethod { std::string_view sel; BuiltinId id; int ret; }; // 0=str,1=i64,2=bool
+            static const FileInfoMethod fi_map[] = {
+                {"Name",  BuiltinId::OsFileInfoName,  0},
+                {"Size",  BuiltinId::OsFileInfoSize,  1},
+                {"IsDir", BuiltinId::OsFileInfoIsDir, 2},
+            };
+            for (const auto& fm : fi_map) {
+                if (sel_name == fm.sel) {
+                    auto* sym = arena_.create<Symbol>();
+                    sym->kind = SymbolKind::Builtin;
+                    sym->builtin_id = static_cast<int>(fm.id);
+                    sym->used = true;
+                    std::string full = "os.FileInfo." + std::string(sel_name);
+                    auto* stored = arena_.allocate_array<char>(full.size() + 1);
+                    std::memcpy(stored, full.data(), full.size() + 1);
+                    sym->name = std::string_view(stored, full.size());
+                    info.symbol = sym;
+                    info.type = fm.ret == 0 ? str_ret : fm.ret == 1 ? i64_ret : bool_ret;
                     info.needs_addr_for_recv = false;
                     return info;
                 }
