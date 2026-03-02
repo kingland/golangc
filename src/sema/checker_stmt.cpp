@@ -169,6 +169,13 @@ void Checker::check_short_var_decl(ast::ShortVarDeclStmt& stmt) {
         multi_return = true;
         result_types = rhs_infos[0].type->tuple->types;
     }
+    // Handle two-value type assertion: v, ok := x.(T)
+    // check_type_assert returns only T; synthesize (T, bool) here.
+    if (!multi_return && stmt.lhs.count == 2 && stmt.rhs.count == 1 &&
+        stmt.rhs[0] && stmt.rhs[0]->kind == ast::ExprKind::TypeAssert) {
+        multi_return = true;
+        result_types = {rhs_infos[0].type, basic_type(BasicKind::Bool)};
+    }
 
     for (uint32_t i = 0; i < stmt.lhs.count; ++i) {
         auto* lhs = stmt.lhs[i];

@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -104,6 +105,27 @@ void golangc_chan_recv(golangc_chan* ch, void* out_ptr) {
         LeaveCriticalSection(&ch->lock);
         ReleaseSemaphore(ch->not_full, 1, nullptr);
     }
+}
+
+void golangc_chan_close(golangc_chan* ch) {
+    if (!ch) {
+        // close(nil channel) panics in Go
+        std::fputs("panic: close of nil channel\n", stderr);
+        std::exit(2);
+    }
+    // For our simplified runtime, closing a buffered channel releases blocked
+    // receivers so they get a zero value. For unbuffered, signal recv_ready
+    // so any waiting goroutine can exit. This is a best-effort implementation.
+    EnterCriticalSection(&ch->lock);
+    if (ch->buffer_cap == 0) {
+        // Signal any waiting receiver that the channel is done
+        // (they will read whatever data_ptr pointed to, or a zeroed value)
+        ReleaseSemaphore(ch->sender_ready, 1, nullptr);
+    } else {
+        // For buffered: release not_empty once so a blocked receiver can drain
+        ReleaseSemaphore(ch->not_empty, 1, nullptr);
+    }
+    LeaveCriticalSection(&ch->lock);
 }
 
 // ============================================================================

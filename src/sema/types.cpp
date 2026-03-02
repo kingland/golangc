@@ -301,42 +301,25 @@ Type* underlying(Type* t) {
 // default_type
 // ============================================================================
 
-namespace {
-// These are lazily created singletons for default types
-Type g_basic_types[static_cast<size_t>(BasicKind::Invalid) + 1];
-bool g_basic_types_init = false;
-
-void ensure_basic_types() {
-    if (g_basic_types_init) return;
-    g_basic_types_init = true;
-    for (size_t i = 0; i <= static_cast<size_t>(BasicKind::Invalid); ++i) {
-        g_basic_types[i].kind = TypeKind::Basic;
-        g_basic_types[i].basic = static_cast<BasicKind>(i);
-    }
-}
-} // namespace
+// Forward-declare basic_type() from universe.cpp (same namespace, same TU group).
+// We use it so that default_type() returns the same Type* pointers as the
+// universe scope's type symbols — avoiding duplicate singleton arrays that
+// would cause type_id_for() to assign different IDs to what is logically the
+// same type.
+Type* basic_type(BasicKind kind);
 
 Type* default_type(Type* t) {
-    ensure_basic_types();
     if (!t || t->kind != TypeKind::Basic) return t;
 
     switch (t->basic) {
-        case BasicKind::UntypedBool:
-            return &g_basic_types[static_cast<size_t>(BasicKind::Bool)];
-        case BasicKind::UntypedInt:
-            return &g_basic_types[static_cast<size_t>(BasicKind::Int)];
-        case BasicKind::UntypedRune:
-            return &g_basic_types[static_cast<size_t>(BasicKind::Int32)];
-        case BasicKind::UntypedFloat:
-            return &g_basic_types[static_cast<size_t>(BasicKind::Float64)];
-        case BasicKind::UntypedComplex:
-            return &g_basic_types[static_cast<size_t>(BasicKind::Complex128)];
-        case BasicKind::UntypedString:
-            return &g_basic_types[static_cast<size_t>(BasicKind::String)];
-        case BasicKind::UntypedNil:
-            return t; // nil has no default type
-        default:
-            return t;
+        case BasicKind::UntypedBool:    return basic_type(BasicKind::Bool);
+        case BasicKind::UntypedInt:     return basic_type(BasicKind::Int);
+        case BasicKind::UntypedRune:    return basic_type(BasicKind::Int32);
+        case BasicKind::UntypedFloat:   return basic_type(BasicKind::Float64);
+        case BasicKind::UntypedComplex: return basic_type(BasicKind::Complex128);
+        case BasicKind::UntypedString:  return basic_type(BasicKind::String);
+        case BasicKind::UntypedNil:     return t; // nil has no default type
+        default:                        return t;
     }
 }
 

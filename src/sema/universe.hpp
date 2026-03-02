@@ -62,6 +62,8 @@ enum class BuiltinId : int {
     StringsBuilderLen,         // b.Len() int
     // errors pseudo-package
     ErrorsNew,   // errors.New(msg string) error
+    ErrorsIs,    // errors.Is(err, target error) bool
+    ErrorsAs,    // errors.As(err error, target interface{}) bool
     // fmt.Errorf
     FmtErrorf,   // fmt.Errorf(format string, args...) error
     // sync.Mutex methods (called on a *sync.Mutex receiver)
@@ -109,6 +111,17 @@ enum class BuiltinId : int {
     StringsFields,       // strings.Fields(s string) []string
     StringsTrimPrefix,   // strings.TrimPrefix(s, prefix string) string
     StringsTrimSuffix,   // strings.TrimSuffix(s, suffix string) string
+    StringsContainsRune, // strings.ContainsRune(s string, r rune) bool
+    StringsIndexByte,    // strings.IndexByte(s string, c byte) int
+    StringsLastIndex,    // strings.LastIndex(s, substr string) int
+    StringsMap,          // strings.Map(mapping func(rune) rune, s string) string
+    StringsTitle,        // strings.Title(s string) string  (deprecated but common)
+    StringsEqualFold,    // strings.EqualFold(s, t string) bool
+    StringsContainsAny,  // strings.ContainsAny(s, chars string) bool
+    StringsIndexRune,    // strings.IndexRune(s string, r rune) int
+    StringsReplaceAll,   // strings.ReplaceAll(s, old, new string) string
+    StringsTrimLeft,     // strings.TrimLeft(s, cutset string) string
+    StringsTrimRight,    // strings.TrimRight(s, cutset string) string
     // bufio pseudo-package
     BufioNewScanner,     // bufio.NewScanner(r io.Reader) *bufio.Scanner
     BufioNewReader,      // bufio.NewReader(r io.Reader) *bufio.Reader
@@ -138,6 +151,45 @@ enum class BuiltinId : int {
     RandSeed,            // rand.Seed(seed int64)
     RandNew,             // rand.New(src rand.Source) *rand.Rand (simplified)
     RandNewSource,       // rand.NewSource(seed int64) rand.Source
+    // unicode pseudo-package
+    UnicodeIsLetter,     // unicode.IsLetter(r rune) bool
+    UnicodeIsDigit,      // unicode.IsDigit(r rune) bool
+    UnicodeIsSpace,      // unicode.IsSpace(r rune) bool
+    UnicodeIsUpper,      // unicode.IsUpper(r rune) bool
+    UnicodeIsLower,      // unicode.IsLower(r rune) bool
+    UnicodeToUpper,      // unicode.ToUpper(r rune) rune
+    UnicodeToLower,      // unicode.ToLower(r rune) rune
+    // bytes.Buffer methods (called on *bytes.Buffer receiver)
+    BytesBufferWriteString, // b.WriteString(s string) (int, error)
+    BytesBufferWriteByte,   // b.WriteByte(c byte) error
+    BytesBufferWrite,       // b.Write(p []byte) (int, error)
+    BytesBufferString,      // b.String() string
+    BytesBufferReset,       // b.Reset()
+    BytesBufferLen,         // b.Len() int
+    BytesNewBuffer,         // bytes.NewBuffer(buf []byte) *bytes.Buffer
+    BytesNewBufferString,   // bytes.NewBufferString(s string) *bytes.Buffer
+    // os extras
+    OsWriteFile,            // os.WriteFile(name string, data []byte, perm int) error
+    OsRemove,               // os.Remove(name string) error
+    OsMkdir,                // os.Mkdir(name string, perm int) error
+    OsMkdirAll,             // os.MkdirAll(path string, perm int) error
+    OsUserHomeDir,          // os.UserHomeDir() (string, error)
+    OsTempDir,              // os.TempDir() string
+    // os.File extras
+    OsFileRead,             // f.Read(b []byte) (int, error)
+    OsFileWrite,            // f.Write(b []byte) (int, error)
+    OsFileSeek,             // f.Seek(offset int64, whence int) (int64, error)
+    // strings.Reader
+    StringsNewReader,       // strings.NewReader(s string) *strings.Reader
+    StringsReaderReadString, // (not a real method, placeholder for read)
+    // io
+    IoReadAll,              // io.ReadAll(r io.Reader) ([]byte, error)
+    // path/filepath
+    FilepathJoin,           // filepath.Join(elem ...string) string
+    FilepathDir,            // filepath.Dir(path string) string
+    FilepathBase,           // filepath.Base(path string) string
+    FilepathExt,            // filepath.Ext(path string) string
+    FilepathAbs,            // filepath.Abs(path string) (string, error)
     // Sentinel
     Count
 };
@@ -175,6 +227,14 @@ enum class BuiltinId : int {
 /// Get the bufio.Reader opaque pointer type (*bufio.Reader).
 /// Returns nullptr until init_universe() has been called.
 [[nodiscard]] Type* bufio_reader_ptr_type();
+
+/// Get the bytes.Buffer opaque pointer type (*bytes.Buffer).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* bytes_buffer_ptr_type();
+
+/// Get the strings.Reader opaque pointer type (*strings.Reader).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* strings_reader_ptr_type();
 
 } // namespace sema
 } // namespace golangc

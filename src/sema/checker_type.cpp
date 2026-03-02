@@ -46,6 +46,14 @@ Type* Checker::resolve_type(ast::TypeExpr* texpr) {
             if (qual.package == "os" && qual.name == "File") {
                 return os_file_ptr_type();
             }
+            // bytes.Buffer → opaque pointer type registered in universe
+            if (qual.package == "bytes" && qual.name == "Buffer") {
+                return bytes_buffer_ptr_type();
+            }
+            // strings.Reader → opaque pointer type registered in universe
+            if (qual.package == "strings" && qual.name == "Reader") {
+                return strings_reader_ptr_type();
+            }
             diag_.error(qual.loc, "qualified types ({}.{}) not yet supported",
                        qual.package, qual.name);
             return nullptr;

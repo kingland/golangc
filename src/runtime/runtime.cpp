@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cctype>
 #include <cmath>
+#include <vector>
 
 // Global closure environment pointer — set by ClosureMake before calling Ret,
 // read at indirect call sites to pass as hidden env arg.
@@ -291,6 +292,19 @@ void golangc_map_iter_free(golangc_map_iter* it) {
 // ============================================================================
 // Slice append
 // ============================================================================
+
+int64_t golangc_slice_copy(void* dst, const void* src, int64_t elem_size) {
+    if (!dst || !src || elem_size <= 0) return 0;
+    // Slice header: {void* ptr, int64_t len, int64_t cap}
+    void*   d_ptr = *static_cast<void**>(dst);
+    int64_t d_len = *reinterpret_cast<const int64_t*>(static_cast<const char*>(dst) + 8);
+    void*   s_ptr = *static_cast<void* const*>(src);
+    int64_t s_len = *reinterpret_cast<const int64_t*>(static_cast<const char*>(src) + 8);
+    if (!d_ptr || !s_ptr) return 0;
+    int64_t n = d_len < s_len ? d_len : s_len;
+    if (n > 0) std::memcpy(d_ptr, s_ptr, static_cast<size_t>(n * elem_size));
+    return n;
+}
 
 void golangc_slice_append(void* slice_out, const void* elem_ptr, int64_t elem_size) {
     // slice_out points to {void* ptr, int64_t len, int64_t cap}
@@ -761,6 +775,212 @@ void golangc_strings_trim_suffix(char* sret_out,
     }
 }
 
+// ---- strings.ContainsRune ----
+int64_t golangc_strings_contains_rune(const char* s_ptr, int64_t s_len, int64_t r) {
+    // Encode r as UTF-8 and search
+    if (r < 0x80) {
+        char c = static_cast<char>(r);
+        for (int64_t i = 0; i < s_len; ++i)
+            if (s_ptr[i] == c) return 1;
+        return 0;
+    }
+    // Multi-byte rune: encode and use strstr-style search
+    char buf[5] = {};
+    int n = 0;
+    uint32_t cp = static_cast<uint32_t>(r);
+    if (cp < 0x800) {
+        buf[0] = static_cast<char>(0xC0 | (cp >> 6));
+        buf[1] = static_cast<char>(0x80 | (cp & 0x3F));
+        n = 2;
+    } else if (cp < 0x10000) {
+        buf[0] = static_cast<char>(0xE0 | (cp >> 12));
+        buf[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        buf[2] = static_cast<char>(0x80 | (cp & 0x3F));
+        n = 3;
+    } else {
+        buf[0] = static_cast<char>(0xF0 | (cp >> 18));
+        buf[1] = static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+        buf[2] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        buf[3] = static_cast<char>(0x80 | (cp & 0x3F));
+        n = 4;
+    }
+    for (int64_t i = 0; i <= s_len - n; ++i) {
+        if (memcmp(s_ptr + i, buf, static_cast<size_t>(n)) == 0) return 1;
+    }
+    return 0;
+}
+
+// ---- strings.IndexByte ----
+int64_t golangc_strings_index_byte(const char* s_ptr, int64_t s_len, int64_t c) {
+    char ch = static_cast<char>(c & 0xFF);
+    for (int64_t i = 0; i < s_len; ++i)
+        if (s_ptr[i] == ch) return i;
+    return -1;
+}
+
+// ---- strings.LastIndex ----
+int64_t golangc_strings_last_index(const char* s_ptr, int64_t s_len,
+                                    const char* sub_ptr, int64_t sub_len) {
+    if (sub_len == 0) return s_len;
+    if (sub_len > s_len) return -1;
+    int64_t result = -1;
+    for (int64_t i = 0; i <= s_len - sub_len; ++i) {
+        if (memcmp(s_ptr + i, sub_ptr, static_cast<size_t>(sub_len)) == 0)
+            result = i;
+    }
+    return result;
+}
+
+// ---- strings.IndexRune ----
+int64_t golangc_strings_index_rune(const char* s_ptr, int64_t s_len, int64_t r) {
+    if (r < 0x80) {
+        char c = static_cast<char>(r);
+        for (int64_t i = 0; i < s_len; ++i)
+            if (s_ptr[i] == c) return i;
+        return -1;
+    }
+    char buf[5] = {};
+    int n = 0;
+    uint32_t cp = static_cast<uint32_t>(r);
+    if (cp < 0x800) {
+        buf[0] = static_cast<char>(0xC0 | (cp >> 6));
+        buf[1] = static_cast<char>(0x80 | (cp & 0x3F));
+        n = 2;
+    } else if (cp < 0x10000) {
+        buf[0] = static_cast<char>(0xE0 | (cp >> 12));
+        buf[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        buf[2] = static_cast<char>(0x80 | (cp & 0x3F));
+        n = 3;
+    } else {
+        buf[0] = static_cast<char>(0xF0 | (cp >> 18));
+        buf[1] = static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+        buf[2] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        buf[3] = static_cast<char>(0x80 | (cp & 0x3F));
+        n = 4;
+    }
+    for (int64_t i = 0; i <= s_len - n; ++i) {
+        if (memcmp(s_ptr + i, buf, static_cast<size_t>(n)) == 0) return i;
+    }
+    return -1;
+}
+
+// ---- strings.EqualFold ----
+int64_t golangc_strings_equal_fold(const char* s_ptr, int64_t s_len,
+                                    const char* t_ptr, int64_t t_len) {
+    if (s_len != t_len) return 0;
+    for (int64_t i = 0; i < s_len; ++i) {
+        if (tolower((unsigned char)s_ptr[i]) != tolower((unsigned char)t_ptr[i]))
+            return 0;
+    }
+    return 1;
+}
+
+// ---- strings.ContainsAny ----
+int64_t golangc_strings_contains_any(const char* s_ptr, int64_t s_len,
+                                      const char* chars_ptr, int64_t chars_len) {
+    for (int64_t i = 0; i < s_len; ++i)
+        for (int64_t j = 0; j < chars_len; ++j)
+            if (s_ptr[i] == chars_ptr[j]) return 1;
+    return 0;
+}
+
+// ---- strings.Map ----
+// mapping_fn is a pointer to a Go closure env struct; first field is the function pointer.
+// For top-level funcs, mapping_fn itself is the function pointer (no env).
+// Signature: int64_t (*)(int64_t rune)
+void golangc_strings_map(char* sret_out, void* mapping_fn,
+                          const char* s_ptr, int64_t s_len) {
+    typedef int64_t (*MapFn)(int64_t);
+    MapFn fn = reinterpret_cast<MapFn>(mapping_fn);
+    // Worst case: every byte expands to 4-byte UTF-8 rune
+    std::vector<char> out;
+    out.reserve(static_cast<size_t>(s_len) * 4);
+    int64_t i = 0;
+    while (i < s_len) {
+        // Decode one UTF-8 rune
+        uint32_t cp;
+        unsigned char b = static_cast<unsigned char>(s_ptr[i]);
+        int nb;
+        if (b < 0x80)       { cp = b; nb = 1; }
+        else if (b < 0xE0)  { cp = b & 0x1F; nb = 2; }
+        else if (b < 0xF0)  { cp = b & 0x0F; nb = 3; }
+        else                { cp = b & 0x07; nb = 4; }
+        for (int k = 1; k < nb && i + k < s_len; ++k)
+            cp = (cp << 6) | (static_cast<unsigned char>(s_ptr[i + k]) & 0x3F);
+        i += nb;
+        int64_t mapped = fn(static_cast<int64_t>(cp));
+        if (mapped < 0) continue; // negative rune = drop
+        uint32_t mc = static_cast<uint32_t>(mapped);
+        if (mc < 0x80) {
+            out.push_back(static_cast<char>(mc));
+        } else if (mc < 0x800) {
+            out.push_back(static_cast<char>(0xC0 | (mc >> 6)));
+            out.push_back(static_cast<char>(0x80 | (mc & 0x3F)));
+        } else if (mc < 0x10000) {
+            out.push_back(static_cast<char>(0xE0 | (mc >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((mc >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (mc & 0x3F)));
+        } else {
+            out.push_back(static_cast<char>(0xF0 | (mc >> 18)));
+            out.push_back(static_cast<char>(0x80 | ((mc >> 12) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | ((mc >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (mc & 0x3F)));
+        }
+    }
+    sret_string(sret_out, out.data(), static_cast<int64_t>(out.size()));
+}
+
+// ---- strings.Title ----
+void golangc_strings_title(char* sret_out, const char* s_ptr, int64_t s_len) {
+    std::vector<char> out(static_cast<size_t>(s_len));
+    bool capitalize_next = true;
+    for (int64_t i = 0; i < s_len; ++i) {
+        unsigned char c = static_cast<unsigned char>(s_ptr[i]);
+        if (isspace(c)) {
+            out[static_cast<size_t>(i)] = static_cast<char>(c);
+            capitalize_next = true;
+        } else if (capitalize_next) {
+            out[static_cast<size_t>(i)] = static_cast<char>(toupper(c));
+            capitalize_next = false;
+        } else {
+            out[static_cast<size_t>(i)] = static_cast<char>(c);
+        }
+    }
+    sret_string(sret_out, out.data(), s_len);
+}
+
+// ---- strings.TrimLeft ----
+void golangc_strings_trim_left(char* sret_out,
+                                const char* s_ptr,   int64_t s_len,
+                                const char* cut_ptr, int64_t cut_len) {
+    int64_t start = 0;
+    while (start < s_len) {
+        bool found = false;
+        for (int64_t j = 0; j < cut_len; ++j) {
+            if (s_ptr[start] == cut_ptr[j]) { found = true; break; }
+        }
+        if (!found) break;
+        ++start;
+    }
+    sret_string(sret_out, s_ptr + start, s_len - start);
+}
+
+// ---- strings.TrimRight ----
+void golangc_strings_trim_right(char* sret_out,
+                                 const char* s_ptr,   int64_t s_len,
+                                 const char* cut_ptr, int64_t cut_len) {
+    int64_t end = s_len;
+    while (end > 0) {
+        bool found = false;
+        for (int64_t j = 0; j < cut_len; ++j) {
+            if (s_ptr[end - 1] == cut_ptr[j]) { found = true; break; }
+        }
+        if (!found) break;
+        --end;
+    }
+    sret_string(sret_out, s_ptr, end);
+}
+
 // ---- strings.Fields ----
 void golangc_strings_fields(char* sret_out, const char* s_ptr, int64_t s_len) {
     struct GoStr { const char* ptr; int64_t len; };
@@ -1116,6 +1336,92 @@ int64_t golangc_rand_intn(int64_t n) {
 
 double golangc_rand_float64(void) {
     return static_cast<double>(rand()) / (static_cast<double>(RAND_MAX) + 1.0);
+}
+
+// ============================================================================
+// unicode package
+// ============================================================================
+
+#include <cwctype>
+#include <cwchar>
+
+int64_t golangc_unicode_is_letter(int64_t r) { return iswalpha(static_cast<wint_t>(r)) ? 1 : 0; }
+int64_t golangc_unicode_is_digit(int64_t r)  { return iswdigit(static_cast<wint_t>(r)) ? 1 : 0; }
+int64_t golangc_unicode_is_space(int64_t r)  { return iswspace(static_cast<wint_t>(r)) ? 1 : 0; }
+int64_t golangc_unicode_is_upper(int64_t r)  { return iswupper(static_cast<wint_t>(r)) ? 1 : 0; }
+int64_t golangc_unicode_is_lower(int64_t r)  { return iswlower(static_cast<wint_t>(r)) ? 1 : 0; }
+int64_t golangc_unicode_to_upper(int64_t r)  { return static_cast<int64_t>(towupper(static_cast<wint_t>(r))); }
+int64_t golangc_unicode_to_lower(int64_t r)  { return static_cast<int64_t>(towlower(static_cast<wint_t>(r))); }
+
+// ============================================================================
+// bytes package
+// ============================================================================
+
+struct golangc_bytes_buffer {
+    char*   data;
+    int64_t len;
+    int64_t cap;
+};
+
+static golangc_bytes_buffer* bytes_buf_alloc(void) {
+    golangc_bytes_buffer* b = static_cast<golangc_bytes_buffer*>(malloc(sizeof(golangc_bytes_buffer)));
+    b->data = static_cast<char*>(malloc(64));
+    b->len  = 0;
+    b->cap  = 64;
+    return b;
+}
+
+static void bytes_buf_grow(golangc_bytes_buffer* b, int64_t need) {
+    if (b->len + need <= b->cap) return;
+    while (b->cap < b->len + need) b->cap *= 2;
+    b->data = static_cast<char*>(realloc(b->data, static_cast<size_t>(b->cap)));
+}
+
+golangc_bytes_buffer* golangc_bytes_new_buffer(void) {
+    return bytes_buf_alloc();
+}
+
+golangc_bytes_buffer* golangc_bytes_new_buffer_string(const char* ptr, int64_t len) {
+    golangc_bytes_buffer* b = bytes_buf_alloc();
+    bytes_buf_grow(b, len);
+    memcpy(b->data, ptr, static_cast<size_t>(len));
+    b->len = len;
+    return b;
+}
+
+void golangc_bytes_write_string(golangc_bytes_buffer* b, const char* ptr, int64_t len) {
+    bytes_buf_grow(b, len);
+    memcpy(b->data + b->len, ptr, static_cast<size_t>(len));
+    b->len += len;
+}
+
+void golangc_bytes_write_byte(golangc_bytes_buffer* b, int64_t byte_val) {
+    bytes_buf_grow(b, 1);
+    b->data[b->len++] = static_cast<char>(byte_val);
+}
+
+void golangc_bytes_write(golangc_bytes_buffer* b, void* slice_ptr, int64_t slice_len) {
+    if (!slice_ptr || slice_len <= 0) return;
+    bytes_buf_grow(b, slice_len);
+    memcpy(b->data + b->len, slice_ptr, static_cast<size_t>(slice_len));
+    b->len += slice_len;
+}
+
+void golangc_bytes_string(char* sret_out, golangc_bytes_buffer* b) {
+    char* out_ptr = static_cast<char*>(malloc(static_cast<size_t>(b->len + 1)));
+    memcpy(out_ptr, b->data, static_cast<size_t>(b->len));
+    out_ptr[b->len] = '\0';
+    int64_t* out = reinterpret_cast<int64_t*>(sret_out);
+    out[0] = reinterpret_cast<int64_t>(out_ptr);
+    out[1] = b->len;
+}
+
+void golangc_bytes_reset(golangc_bytes_buffer* b) {
+    b->len = 0;
+}
+
+int64_t golangc_bytes_len(golangc_bytes_buffer* b) {
+    return b->len;
 }
 
 } // extern "C"

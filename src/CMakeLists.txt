@@ -75,6 +75,7 @@ add_library(golangc_runtime STATIC
     runtime/bufio.cpp
     runtime/fmt_scan.cpp
     runtime/sort.cpp
+    runtime/os_extras.cpp
 )
 target_include_directories(golangc_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 

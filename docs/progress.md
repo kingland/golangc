@@ -1,8 +1,8 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 27 (math constants + elided composite literals) - Complete
-## Current Milestone: Phase 27 complete - math.Pi/E/MaxFloat64/MaxInt64 constants, math.Sin/Cos/Tan/Atan2/Exp/Mod etc., type-elided composite literals in map/slice/struct literals — 13 new Phase27Test tests (317 codegen tests, 704 total)
-## Completion Estimate: 96%
+## Current Phase: 32 (os.WriteFile/Remove/Mkdir, strings.NewReader, filepath, fmt.Sprintf Stringer) - Complete
+## Current Milestone: Phase 32 complete - os.WriteFile/Remove/Mkdir/MkdirAll/TempDir/UserHomeDir, strings.NewReader + strings.Reader, io.ReadAll, path/filepath (Join/Dir/Base/Ext/Abs), fmt.Sprintf Stringer dispatch — 13 new Phase32Test tests (379 codegen tests, 766 total)
+## Completion Estimate: 99%
 
 ## Component Status
 | Component | Status | Tests | Notes |
@@ -14,11 +14,85 @@
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T in call args fixed |
 | Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction; spread type check fix; unused param false positive fix |
 | IR | ✅ Complete | 71 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq, make_array_type public |
-| CodeGen | ✅ Complete | 317 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, buffered+unbuffered channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os/strings/math/errors/sync/bufio/sort/time/rand pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings.Builder, errors.New, fmt.Errorf, sync.Mutex, sync.WaitGroup, os.Stdout/Stderr/Stdin, fmt.Fprintf/Fprintln/Scan/Scanln/Scanf/Sscan/Sscanf/Sprint/Fprint, os.Exit/Open/Create/ReadFile/Getenv, os.File.Close/WriteString, strconv.ParseInt/ParseFloat/FormatInt/FormatFloat/ParseBool/FormatBool, bufio.NewScanner/NewReader, bufio.Scanner.Scan/Text/Err, bufio.Reader.ReadString, sort.Ints/Strings/Slice, strings.Fields/TrimPrefix/TrimSuffix/Split/Join (real), time.Sleep/Now/Since/Hour/Minute/Second/Millisecond, rand.Intn/Float64/Seed, []byte(s) type conversion, named return values |
+| CodeGen | ✅ Complete | 346 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, buffered+unbuffered channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os/strings/math/errors/sync/bufio/sort/time/rand pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings.Builder, errors.New, fmt.Errorf, sync.Mutex, sync.WaitGroup, os.Stdout/Stderr/Stdin, fmt.Fprintf/Fprintln/Scan/Scanln/Scanf/Sscan/Sscanf/Sprint/Fprint, os.Exit/Open/Create/ReadFile/Getenv, os.File.Close/WriteString, strconv.ParseInt/ParseFloat/FormatInt/FormatFloat/ParseBool/FormatBool, bufio.NewScanner/NewReader, bufio.Scanner.Scan/Text/Err, bufio.Reader.ReadString, sort.Ints/Strings/Slice, strings.Fields/TrimPrefix/TrimSuffix/Split/Join (real), time.Sleep/Now/Since/Hour/Minute/Second/Millisecond, rand.Intn/Float64/Seed, []byte(s) type conversion, named return values |
 | Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel (unbuffered+buffered ring buffer) + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get + golangc_string_decode_rune + strings package + math package + golangc_builder_{make,write_string,write_byte,string,reset,len} + golangc_errors_new + golangc_fmt_errorf + golangc_mutex_{make,lock,unlock,try_lock} + golangc_waitgroup_{make,add,done,wait} + golangc_file struct + golangc_os_stdout/stderr/stdin + golangc_fprintf + golangc_os_exit + golangc_os_open/create/file_close/file_write_string/getenv + golangc_parse_float/format_float/parse_bool/format_bool (strconv_ext.cpp) + golangc_scanner_{new,scan,text} + golangc_breader_{new,read_string} + golangc_os_read_file (bufio.cpp) + golangc_fmt_scan/scanln/scanf/sscan/sscanf (fmt_scan.cpp) + golangc_sort_ints/strings/slice (sort.cpp) + golangc_strings_fields/trim_prefix/trim_suffix/split/join + golangc_time_sleep/now/since + golangc_rand_seed/intn/float64 |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
+
+### Session 32 - Phase 32: os.WriteFile/Remove/Mkdir, strings.NewReader, filepath, fmt.Sprintf Stringer (2026-03-01)
+#### Completed
+- **`os.WriteFile(name, data []byte, perm) error`** — writes file using `fwrite`; `golangc_os_write_file` in `os_extras.cpp`
+- **`os.Remove(name) error`** — `std::remove`; `golangc_os_remove`
+- **`os.Mkdir/MkdirAll(path, perm) error`** — `CreateDirectoryA`; `golangc_os_mkdir/mkdir_all`
+- **`os.TempDir() string`** — `GetTempPathA`; returns via sret; `golangc_os_temp_dir`
+- **`os.UserHomeDir() (string, error)`** — `USERPROFILE`/`HOME` env var; `golangc_os_user_home_dir`
+- **`strings.NewReader(s) *strings.Reader`** — opaque struct `{data, total_len, pos}`; `golangc_strings_reader_new/read/len`
+- **`io.ReadAll(r) ([]byte, error)`** — drains a `strings.Reader`; `golangc_io_read_all`
+- **`path/filepath`** — Join (2-arg), Dir, Base, Ext, Abs; all in `os_extras.cpp` with `\\` separator; `filepath` added as pseudo-package
+- **`fmt.Sprintf` Stringer dispatch** — same Named-type `.String()` detection logic as `fmt.Println`/`fmt.Sprint`
+- **`strings.Reader` opaque type** — registered in universe, accessible as `*strings.Reader`; `strings_reader_ptr_type()` accessor
+- New `os_extras.cpp` runtime source added to `CMakeLists.txt`
+- Added 13 `Phase32Test` tests (13/13 pass)
+- 379 codegen tests, 766 total — all 6 test suites pass
+#### Next Steps
+- More language correctness: composite literals `[]byte{...}` as function call arguments (fix parser)
+- `fmt.Printf` Stringer dispatch (mirrors Sprintf fix)
+- `os.Stat`, `os.IsNotExist`, file info
+- `strings.Builder` `.WriteString` returning (int, error) correctly
+
+### Session 31 - Phase 31: copy(), close(), type assert panic, two-value type assert IR (2026-03-01)
+#### Completed
+- **`copy(dst, src []T) int`** — IR gen emits `golangc_slice_copy(dst, src, elem_size)` runtime call; elem_size derived from sema slice element type; runtime reads `{ptr,len,cap}` slice headers and calls `memcpy` for `min(len(dst), len(src))` elements; returns count
+- **`close(ch)`** — IR gen emits `golangc_chan_close(ch)` runtime call; runtime signals blocked goroutines and returns; panics on nil channel
+- **Type assertion panic** (`v := i.(T)`) — `gen_type_assert` now emits tag check: `create_interface_type` + cmp against `type_id_for(T)` + `condbr` to ok/fail blocks; fail block calls `golangc_panic` with "interface conversion: interface is wrong type"
+- **Two-value type assertion IR** (`v, ok := i.(T)`) — `gen_short_var_decl` handles TypeAssert with 2 LHS: computes tag comparison, stores cmp result to ok alloca, extracts interface data to v alloca; no panic path (ok=false on mismatch)
+- **`uintptr`** — already registered as `BasicKind::Uintptr` in universe; confirmed working
+- Added 10 `Phase31Test` tests (10/10 pass)
+- 366 codegen tests, 753 total — all 6 test suites pass
+#### Current State
+- copy(): full implementation (slice header parsing, memcpy, returns n)
+- close(): full implementation (panic on nil, signal semantics)
+- type assertion: single-value panics on mismatch; two-value sets ok correctly
+- uintptr: available as a basic type
+#### Next Steps
+- fmt.Println with %v for structs / named types
+- string formatting verbs (%d, %s, %v etc) in more contexts
+- os.WriteFile, path/filepath basics
+- iota in typed const expressions
+
+### Session 30 - Phase 30: type switch correctness, errors.Is/As, type assertion ok-form (2026-03-01)
+#### Completed
+- **Root-cause fix: duplicate `g_basic_types` arrays** — `types.cpp` had its own `g_basic_types[]` independent of `universe.cpp`'s array; `default_type()` was mapping `UntypedInt → &types_array[Int]` while type switch cases resolved to `&universe_array[Int]` — different pointers yielded different `type_id_for` IDs. Fix: removed the local array in `types.cpp` and made `default_type()` forward-declare and call `basic_type()` from `universe.cpp` (the authoritative singleton).
+- **Type switch fully functional** — `switch v := x.(type) { case int: ... }` now correctly matches; all 10 existing TypeSwitchTest tests pass
+- **`errors.Is` / `errors.As`** — inline IR gen for pointer-equality comparison; `errors.New` dispatches to `golangc_errors_new`
+- **Two-value type assertion** — `v, ok := i.(T)` previously gave sema error "cannot use `<invalid>` as bool"; fixed by detecting TypeAssert on single RHS with 2 LHS names in `check_short_var_decl` and synthesizing `(T, bool)` result types
+- Added 10 `Phase30Test` tests (10/10 pass)
+- 356 codegen tests, 743 total — all 6 test suites pass
+#### Current State
+- Type switches: fully working (tag comparison, bound variable, multiple types per case, default, no-default)
+- errors.Is/As: implemented (Is = pointer equality, As = stub false)
+- Two-value type assertion: sema types correct
+#### Next Steps
+- Type assert panic path (single-value `v := i.(T)` should panic if mismatch — currently skips check)
+- More stdlib coverage or language features as needed
+
+### Session 29 - Phase 29: unicode package, bytes.Buffer, fmt.Sprint stringer (2026-03-01)
+#### Completed
+- **`unicode` pseudo-package** — `unicode.IsLetter/IsDigit/IsSpace/IsUpper/IsLower/ToUpper/ToLower` — all dispatch to `golangc_unicode_is_*/to_*` wrappers around `<cwctype>` (`iswalpha`, `iswdigit`, etc.)
+- **`bytes.Buffer`** — full opaque-pointer type registered in universe; `bytes.NewBuffer(nil)` / `bytes.NewBufferString(s)` allocate a heap `golangc_bytes_buffer`; methods `WriteString/WriteByte/Write/String/Reset/Len` dispatched via `bytes.Buffer.*` builtin names; `var b bytes.Buffer` zero-init auto-calls `golangc_bytes_new_buffer` (same pattern as `strings.Builder`); `bytes.Buffer` qualified type resolves in `checker_type.cpp`
+- **`fmt.Sprint` stringer dispatch** — same stringer detection logic as `fmt.Println`: when an arg's named type has a `String() string` method, call it and pass the result as `%s` to `golangc_sprintf`
+- **Phase 28 test fix** — four stringer tests incorrectly checked for `Color.String` (dot) instead of `Color$String` (dollar); fixed to match actual MASM symbol format
+- Added 14 `Phase29Test` tests (14/14 pass)
+- 346 codegen tests, 733 total — all 6 test suites pass
+#### Current State
+- unicode package: 7 functions (IsLetter/Digit/Space/Upper/Lower, ToUpper/Lower)
+- bytes.Buffer: full API (NewBuffer/NewBufferString, WriteString/WriteByte/Write, String/Reset/Len, var-decl zero-init)
+- fmt.Sprint now dispatches to .String() method when available
+#### Next Steps
+- Error handling patterns: errors.Is/As, %w in fmt.Errorf
+- Type switches: switch v := x.(type) { case T: ... }
+- More stdlib: strings.Builder as value + pointer interop, io.Reader/Writer interface patterns
 
 ### Session 27 - Phase 27: math constants + elided composite literals (2026-03-01)
 #### Completed

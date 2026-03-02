@@ -209,6 +209,49 @@ void IRGenerator::gen_short_var_decl(ast::ShortVarDeclStmt& stmt) {
         }
     }
 
+    // Special case: v, ok := i.(T)  (two-value type assertion)
+    if (stmt.lhs.count == 2 && stmt.rhs.count == 1 &&
+        stmt.rhs[0]->kind == ast::ExprKind::TypeAssert) {
+        auto& ta = stmt.rhs[0]->type_assert;
+        auto* iface = gen_expr(ta.x);
+        if (iface) {
+            // Get actual tag from interface
+            auto* actual_tag = builder_.create_interface_type(iface, "ta.tag");
+
+            // Get expected tag for T from sema type info
+            auto* ta_info = expr_info(stmt.rhs[0]);
+            int64_t expected_id = 0;
+            IRType* val_ir_type = type_map_.i64_type();
+            if (ta_info && ta_info->type) {
+                auto* canon = sema::is_untyped(ta_info->type)
+                    ? sema::default_type(ta_info->type) : ta_info->type;
+                expected_id = type_id_for(sema::underlying(canon));
+                val_ir_type = map_sema_type(ta_info->type);
+            }
+            auto* expected_tag = builder_.create_const_int(type_map_.i64_type(), expected_id, "ta.expected");
+            auto* cmp = builder_.create_eq(actual_tag, expected_tag, "ta.ok");
+
+            // ok variable (lhs[1])
+            auto* ok_alloca = builder_.create_alloca(type_map_.i64_type(), "ok.addr");
+            // Store cmp (i1) zero-extended to i64 as ok
+            builder_.create_store(cmp, ok_alloca);
+            if (stmt.lhs[1]->kind == ast::ExprKind::Ident) {
+                auto* ok_info = expr_info(stmt.lhs[1]);
+                if (ok_info && ok_info->symbol) var_map_[ok_info->symbol] = ok_alloca;
+            }
+
+            // v variable (lhs[0]) — extract data (zero if tag mismatch)
+            auto* data = builder_.create_interface_data(iface, val_ir_type, "ta.data");
+            auto* v_alloca = builder_.create_alloca(val_ir_type, "ta.v.addr");
+            builder_.create_store(data, v_alloca);
+            if (stmt.lhs[0]->kind == ast::ExprKind::Ident) {
+                auto* v_info = expr_info(stmt.lhs[0]);
+                if (v_info && v_info->symbol) var_map_[v_info->symbol] = v_alloca;
+            }
+        }
+        return;
+    }
+
     // Special case: multi-return function call  a, b := f()
     if (stmt.lhs.count > 1 && stmt.rhs.count == 1) {
         auto* rhs_val = gen_expr(stmt.rhs[0]);
@@ -244,6 +287,20 @@ void IRGenerator::gen_short_var_decl(ast::ShortVarDeclStmt& stmt) {
         if (!info || !info->symbol) continue;
 
         IRType* var_type = map_sema_type(info->symbol->type);
+
+        // Box the rhs if assigning to interface variable
+        auto* sym_under = sema::underlying(info->symbol->type);
+        if (sym_under && sym_under->kind == sema::TypeKind::Interface && rhs) {
+            auto* rhs_info = checker_.expr_info(stmt.rhs[i]);
+            if (rhs_info && rhs_info->type &&
+                sema::underlying(rhs_info->type)->kind != sema::TypeKind::Interface) {
+                auto* canon = sema::is_untyped(rhs_info->type)
+                    ? sema::default_type(rhs_info->type) : rhs_info->type;
+                int64_t tag = type_id_for(sema::underlying(canon));
+                auto* tag_val = builder_.create_const_int(type_map_.i64_type(), tag, "type.tag");
+                rhs = builder_.create_interface_make(tag_val, rhs, "iface");
+            }
+        }
 
         // Create alloca in entry block
         auto* alloca = builder_.create_alloca(var_type, std::string(ident.name) + ".addr");
@@ -1019,6 +1076,19 @@ void IRGenerator::gen_local_var_spec(ast::VarSpec& spec) {
         if (i < spec.values.count) {
             auto* val = gen_expr(spec.values[i]);
             if (val) {
+                // If the variable is interface{} and the value is not yet boxed, box it
+                auto* sym_under = sema::underlying(sym->type);
+                if (sym_under && sym_under->kind == sema::TypeKind::Interface && val) {
+                    auto* val_info = checker_.expr_info(spec.values[i]);
+                    if (val_info && val_info->type &&
+                        sema::underlying(val_info->type)->kind != sema::TypeKind::Interface) {
+                        auto* canon = sema::is_untyped(val_info->type)
+                            ? sema::default_type(val_info->type) : val_info->type;
+                        int64_t tag = type_id_for(sema::underlying(canon));
+                        auto* tag_val = builder_.create_const_int(type_map_.i64_type(), tag, "type.tag");
+                        val = builder_.create_interface_make(tag_val, val, "iface");
+                    }
+                }
                 builder_.create_store(val, alloca);
             }
         } else {
@@ -1033,9 +1103,10 @@ void IRGenerator::gen_local_var_spec(ast::VarSpec& spec) {
                 if (is_opaque_ptr) {
                     std::string_view type_name = st->pointer.base->named->name;
                     const char* make_fn = nullptr;
-                    if (type_name == "strings.Builder") make_fn = "golangc_builder_make";
-                    else if (type_name == "sync.Mutex")     make_fn = "golangc_mutex_make";
-                    else if (type_name == "sync.WaitGroup") make_fn = "golangc_waitgroup_make";
+                    if (type_name == "strings.Builder")  make_fn = "golangc_builder_make";
+                    else if (type_name == "sync.Mutex")      make_fn = "golangc_mutex_make";
+                    else if (type_name == "sync.WaitGroup")  make_fn = "golangc_waitgroup_make";
+                    else if (type_name == "bytes.Buffer")    make_fn = "golangc_bytes_new_buffer";
                     if (make_fn) {
                         auto* fn = get_or_declare_runtime(make_fn, type_map_.ptr_type());
                         auto* ptr = builder_.create_call(fn, {}, type_map_.ptr_type(),
@@ -1139,8 +1210,22 @@ void IRGenerator::gen_type_switch(ast::TypeSwitchStmt& stmt) {
     if (!builder_.insert_block()->has_terminator())
         builder_.create_br(default_bb);
 
+    // Collect bound variable sema symbols (one per case, from the sema case scope)
+    // The LHS ident of the assign short-var-decl has decl_symbol set by sema per-case.
+    // We use the case CaseClause directly to find the right symbol via checker_.
+    // Pre-pass: find each case's bound symbol by walking body stmts for ident references.
+    // Simpler: look up by walking checker decl_sym_map for all idents in the assign.
+    // Collect the assign LHS ident if present
+    ast::Expr* bound_lhs_ident = nullptr;
+    if (!bound_name.empty() && bound_name != "_" && stmt.assign &&
+        stmt.assign->kind == ast::StmtKind::ShortVarDecl) {
+        auto& svd = stmt.assign->short_var_decl;
+        if (svd.lhs.count > 0) bound_lhs_ident = svd.lhs[0];
+    }
+
     // Emit case bodies
     loop_stack_.push_back({merge_bb, nullptr});
+    size_t case_idx = 0;
     for (auto& ci : cases) {
         builder_.set_insert_block(ci.block);
 
@@ -1149,24 +1234,60 @@ void IRGenerator::gen_type_switch(ast::TypeSwitchStmt& stmt) {
             IRType* data_type = type_map_.i64_type();
             if (!ci.is_default && ci.types.size() == 1 && ci.types[0])
                 data_type = map_sema_type(const_cast<sema::Type*>(ci.types[0]));
-            // Extract data pointer from interface
+            // Extract the concrete value from the interface
             auto* data = builder_.create_interface_data(iface, data_type, "ts.data");
-            // Look up the bound symbol in var_map_
-            // Since sema opens a new scope per case with the bound var,
-            // we can look it up by name in the current case's sema ExprInfo.
-            // Simplest approach: allocate a fresh alloca and map it for
-            // any symbol whose name matches bound_name.
-            for (auto& [sym, slot] : var_map_) {
-                if (sym && sym->name == bound_name) {
-                    builder_.create_store(data, slot);
-                    break;
+            // Find the sema symbol for the bound variable in this case's scope.
+            // Sema declares a fresh symbol per case; we find it by scanning body
+            // ident expressions that refer to bound_name.
+            sema::Symbol* bound_sym = nullptr;
+            for (auto* s : *ci.body) {
+                // Walk the first statement looking for ident with bound_name
+                // that has a declared symbol
+                if (bound_sym) break;
+                // Simple scan: check expr stmts and assign stmts for idents
+                auto scan_expr_for_sym = [&](ast::Expr* e) -> sema::Symbol* {
+                    if (!e) return nullptr;
+                    if (e->kind == ast::ExprKind::Ident && e->ident.name == bound_name) {
+                        auto* ei = expr_info(e);
+                        if (ei && ei->symbol && ei->symbol->kind == sema::SymbolKind::Var)
+                            return ei->symbol;
+                    }
+                    return nullptr;
+                };
+                if (s->kind == ast::StmtKind::Return) {
+                    for (auto* r : s->return_.results.span()) {
+                        bound_sym = scan_expr_for_sym(r);
+                        if (bound_sym) break;
+                    }
+                } else if (s->kind == ast::StmtKind::Expr) {
+                    bound_sym = scan_expr_for_sym(s->expr.x);
                 }
+            }
+            if (bound_sym) {
+                // Allocate or reuse an alloca for this case's bound var
+                auto* alloca = builder_.create_alloca(data_type, bound_name + ".addr");
+                builder_.create_store(data, alloca);
+                var_map_[bound_sym] = alloca;
+            } else {
+                // Fallback: create an anonymous alloca (body uses load from it indirectly)
+                auto* alloca = builder_.create_alloca(data_type, bound_name + ".addr");
+                builder_.create_store(data, alloca);
+                // Map any existing symbol with this name
+                for (auto& [sym, slot] : var_map_) {
+                    if (sym && sym->name == bound_name) {
+                        builder_.create_store(data, slot);
+                        break;
+                    }
+                }
+                // Keep the new alloca accessible via a temporary mapping
+                (void)alloca;
             }
         }
 
         for (auto* s : *ci.body) gen_stmt(s);
         if (!builder_.insert_block()->has_terminator())
             builder_.create_br(merge_bb);
+        ++case_idx;
     }
     loop_stack_.pop_back();
 

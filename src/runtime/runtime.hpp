@@ -108,6 +108,10 @@ void golangc_map_iter_free(golangc_map_iter* it);
 /// elem_size: size of one element in bytes.
 void golangc_slice_append(void* slice_out, const void* elem_ptr, int64_t elem_size);
 
+/// Copy elements from src slice into dst slice. Returns number of elements copied.
+/// dst/src: pointer to {ptr,len,cap}. elem_size: bytes per element.
+int64_t golangc_slice_copy(void* dst, const void* src, int64_t elem_size);
+
 // ---- Goroutine / Channel runtime ----
 
 struct golangc_chan;
@@ -121,6 +125,9 @@ void golangc_chan_send(golangc_chan* ch, void* val_ptr);
 
 /// Receive from ch into out_ptr (blocks until sender delivers).
 void golangc_chan_recv(golangc_chan* ch, void* out_ptr);
+
+/// Close a channel. Panics (exits) if ch is nullptr.
+void golangc_chan_close(golangc_chan* ch);
 
 /// Spawn a goroutine: func_ptr called with arg_count variadic int64_t args.
 void golangc_go_spawn(void* func_ptr, int64_t arg_count, ...);
@@ -291,6 +298,7 @@ int64_t golangc_builder_len(golangc_builder* b);
 /// errors.New(msg string) error — returns interface{type_tag=1, data_ptr} via sret.
 void golangc_errors_new(char* sret_out, const char* msg_ptr, int64_t msg_len);
 
+
 /// fmt.Errorf(format string, ...) error — formatted error via sret.
 void golangc_fmt_errorf(char* sret_out, const char* fmt_ptr, int64_t fmt_len, ...);
 
@@ -404,6 +412,44 @@ void golangc_strings_trim_suffix(char* sret_out,
                                   const char* s_ptr,   int64_t s_len,
                                   const char* suf_ptr, int64_t suf_len);
 
+/// strings.ContainsRune: returns 1 if s contains Unicode code point r, 0 otherwise.
+int64_t golangc_strings_contains_rune(const char* s_ptr, int64_t s_len, int64_t r);
+
+/// strings.IndexByte: returns index of first byte c in s, or -1.
+int64_t golangc_strings_index_byte(const char* s_ptr, int64_t s_len, int64_t c);
+
+/// strings.LastIndex: returns index of last occurrence of substr in s, or -1.
+int64_t golangc_strings_last_index(const char* s_ptr, int64_t s_len,
+                                    const char* sub_ptr, int64_t sub_len);
+
+/// strings.IndexRune: returns byte index of first occurrence of rune r in s, or -1.
+int64_t golangc_strings_index_rune(const char* s_ptr, int64_t s_len, int64_t r);
+
+/// strings.EqualFold: returns 1 if s and t are equal under Unicode case-folding.
+int64_t golangc_strings_equal_fold(const char* s_ptr, int64_t s_len,
+                                    const char* t_ptr, int64_t t_len);
+
+/// strings.ContainsAny: returns 1 if s contains any Unicode code point in chars.
+int64_t golangc_strings_contains_any(const char* s_ptr, int64_t s_len,
+                                      const char* chars_ptr, int64_t chars_len);
+
+/// strings.Map: apply mapping to each rune in s, returns new string via sret.
+/// mapping is a function pointer: int64_t (*)(int64_t rune)
+void golangc_strings_map(char* sret_out, void* mapping_fn, const char* s_ptr, int64_t s_len);
+
+/// strings.Title: returns s with each word's first letter title-cased, via sret.
+void golangc_strings_title(char* sret_out, const char* s_ptr, int64_t s_len);
+
+/// strings.TrimLeft: trim leading chars in cutset, returns string via sret.
+void golangc_strings_trim_left(char* sret_out,
+                                const char* s_ptr,   int64_t s_len,
+                                const char* cut_ptr, int64_t cut_len);
+
+/// strings.TrimRight: trim trailing chars in cutset, returns string via sret.
+void golangc_strings_trim_right(char* sret_out,
+                                 const char* s_ptr,   int64_t s_len,
+                                 const char* cut_ptr, int64_t cut_len);
+
 /// strings.Split: split s by sep, returns []string via sret (24-byte slice header).
 void golangc_strings_split(char* sret_out,
                             const char* s_ptr,   int64_t s_len,
@@ -442,6 +488,82 @@ void golangc_time_sleep(int64_t nanoseconds);
 int64_t golangc_time_now(void);
 /// Return nanoseconds elapsed since the given timestamp.
 int64_t golangc_time_since(int64_t start_ns);
+
+// ---- unicode package ----
+/// unicode.IsLetter: returns 1 if r is a Unicode letter.
+int64_t golangc_unicode_is_letter(int64_t r);
+/// unicode.IsDigit: returns 1 if r is a Unicode decimal digit.
+int64_t golangc_unicode_is_digit(int64_t r);
+/// unicode.IsSpace: returns 1 if r is a Unicode whitespace character.
+int64_t golangc_unicode_is_space(int64_t r);
+/// unicode.IsUpper: returns 1 if r is an uppercase Unicode letter.
+int64_t golangc_unicode_is_upper(int64_t r);
+/// unicode.IsLower: returns 1 if r is a lowercase Unicode letter.
+int64_t golangc_unicode_is_lower(int64_t r);
+/// unicode.ToUpper: returns the uppercase mapping of r.
+int64_t golangc_unicode_to_upper(int64_t r);
+/// unicode.ToLower: returns the lowercase mapping of r.
+int64_t golangc_unicode_to_lower(int64_t r);
+
+// ---- bytes package ----
+struct golangc_bytes_buffer;
+/// bytes.NewBuffer: allocate a new empty bytes.Buffer.
+golangc_bytes_buffer* golangc_bytes_new_buffer(void);
+/// bytes.NewBufferString: allocate a bytes.Buffer pre-filled with string content.
+golangc_bytes_buffer* golangc_bytes_new_buffer_string(const char* ptr, int64_t len);
+/// b.WriteString: append string to buffer.
+void golangc_bytes_write_string(golangc_bytes_buffer* b, const char* ptr, int64_t len);
+/// b.WriteByte: append single byte to buffer.
+void golangc_bytes_write_byte(golangc_bytes_buffer* b, int64_t byte_val);
+/// b.Write: append byte slice to buffer.
+void golangc_bytes_write(golangc_bytes_buffer* b, void* slice_ptr, int64_t slice_len);
+/// b.String: return accumulated string via sret (16-byte {ptr,len}).
+void golangc_bytes_string(char* sret_out, golangc_bytes_buffer* b);
+/// b.Reset: reset buffer to empty.
+void golangc_bytes_reset(golangc_bytes_buffer* b);
+/// b.Len: return current length of buffer content.
+int64_t golangc_bytes_len(golangc_bytes_buffer* b);
+
+// ---- os extras ----
+/// os.WriteFile: write []byte data to named file. Returns nil (error not exposed to codegen).
+void* golangc_os_write_file(const char* name_ptr, int64_t name_len, void* slice_header);
+/// os.Remove: delete a file by name. Returns nil error pointer (simplified).
+void* golangc_os_remove(const char* name_ptr, int64_t name_len);
+/// os.Mkdir: create directory. Returns nil error pointer (simplified).
+void* golangc_os_mkdir(const char* name_ptr, int64_t name_len, int64_t perm);
+/// os.MkdirAll: create directory and all parents. Returns nil error pointer (simplified).
+void* golangc_os_mkdir_all(const char* name_ptr, int64_t name_len, int64_t perm);
+/// os.TempDir: return temp directory string via sret (16-byte {ptr,len}).
+void golangc_os_temp_dir(char* sret_out);
+/// os.UserHomeDir: return home directory string via sret (16-byte {ptr,len}).
+void golangc_os_user_home_dir(char* sret_out);
+
+// ---- strings.Reader ----
+struct golangc_strings_reader;
+/// strings.NewReader: allocate a Reader from a string.
+golangc_strings_reader* golangc_strings_reader_new(const char* ptr, int64_t len);
+/// r.Read: read up to len(p) bytes into p, return n bytes read.
+int64_t golangc_strings_reader_read(golangc_strings_reader* r, void* slice_header);
+/// r.Len: remaining unread bytes.
+int64_t golangc_strings_reader_len(golangc_strings_reader* r);
+
+// ---- io.ReadAll ----
+/// io.ReadAll: read all bytes from a generic reader. Simplified: only works for strings.Reader.
+/// Returns []byte slice via sret (24-byte {ptr,len,cap}).
+void golangc_io_read_all(char* sret_out, void* reader_ptr);
+
+// ---- path/filepath ----
+/// filepath.Join: join two path segments with OS separator via sret.
+void golangc_filepath_join2(char* sret_out, const char* a_ptr, int64_t a_len,
+                             const char* b_ptr, int64_t b_len);
+/// filepath.Dir: return directory part of path via sret.
+void golangc_filepath_dir(char* sret_out, const char* path_ptr, int64_t path_len);
+/// filepath.Base: return file name part of path via sret.
+void golangc_filepath_base(char* sret_out, const char* path_ptr, int64_t path_len);
+/// filepath.Ext: return file extension (including dot) via sret.
+void golangc_filepath_ext(char* sret_out, const char* path_ptr, int64_t path_len);
+/// filepath.Abs: return absolute path via sret (simplified: just cleans path).
+void golangc_filepath_abs(char* sret_out, const char* path_ptr, int64_t path_len);
 
 // ---- math/rand package ----
 /// Seed the random number generator.

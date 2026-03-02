@@ -33,6 +33,12 @@ Type* g_bufio_scanner_ptr_type = nullptr;
 // Singleton bufio.Reader pointer type (*bufio.Reader)
 Type* g_bufio_reader_ptr_type = nullptr;
 
+// Singleton bytes.Buffer pointer type (*bytes.Buffer)
+Type* g_bytes_buffer_ptr_type = nullptr;
+
+// Singleton strings.Reader pointer type (*strings.Reader)
+Type* g_strings_reader_ptr_type = nullptr;
+
 void ensure_basic_types_initialized() {
     if (g_basic_types_initialized) return;
     g_basic_types_initialized = true;
@@ -117,6 +123,14 @@ Type* bufio_scanner_ptr_type() {
 
 Type* bufio_reader_ptr_type() {
     return g_bufio_reader_ptr_type;
+}
+
+Type* bytes_buffer_ptr_type() {
+    return g_bytes_buffer_ptr_type;
+}
+
+Type* strings_reader_ptr_type() {
+    return g_strings_reader_ptr_type;
 }
 
 Scope* init_universe(ArenaAllocator& arena) {
@@ -217,6 +231,9 @@ Scope* init_universe(ArenaAllocator& arena) {
     (void)scope->insert(make_pseudo_pkg("sort"));
     (void)scope->insert(make_pseudo_pkg("time"));
     (void)scope->insert(make_pseudo_pkg("rand"));
+    (void)scope->insert(make_pseudo_pkg("unicode"));
+    (void)scope->insert(make_pseudo_pkg("bytes"));
+    (void)scope->insert(make_pseudo_pkg("filepath"));
 
     // ---- error interface type ----
     // type error interface { Error() string }
@@ -402,6 +419,53 @@ Scope* init_universe(ArenaAllocator& arena) {
     breader_ptr_ty->pointer.base = breader_named_ty;
 
     g_bufio_reader_ptr_type = breader_ptr_ty;
+
+    // ---- bytes.Buffer opaque named type ----
+    auto* buf_underlying = arena.create<Type>();
+    buf_underlying->kind = TypeKind::Basic;
+    buf_underlying->basic = BasicKind::Int64; // opaque placeholder
+
+    auto* buf_named = arena.create<NamedType>();
+    buf_named->name = "bytes.Buffer";
+    buf_named->underlying = buf_underlying;
+    buf_named->methods.push_back(NamedType::Method{"WriteString", void_ty, true});
+    buf_named->methods.push_back(NamedType::Method{"WriteByte",   void_ty, true});
+    buf_named->methods.push_back(NamedType::Method{"Write",       void_ty, true});
+    buf_named->methods.push_back(NamedType::Method{"String",      void_ty, true});
+    buf_named->methods.push_back(NamedType::Method{"Reset",       void_ty, true});
+    buf_named->methods.push_back(NamedType::Method{"Len",         void_ty, true});
+
+    auto* buf_named_ty = arena.create<Type>();
+    buf_named_ty->kind = TypeKind::Named;
+    buf_named_ty->named = buf_named;
+
+    auto* buf_ptr_ty = arena.create<Type>();
+    buf_ptr_ty->kind = TypeKind::Pointer;
+    buf_ptr_ty->pointer.base = buf_named_ty;
+
+    g_bytes_buffer_ptr_type = buf_ptr_ty;
+
+    // ---- strings.Reader opaque named type ----
+    auto* reader_underlying = arena.create<Type>();
+    reader_underlying->kind = TypeKind::Basic;
+    reader_underlying->basic = BasicKind::Uintptr;
+
+    auto* reader_named = arena.create<NamedType>();
+    reader_named->name = "strings.Reader";
+    reader_named->underlying = reader_underlying;
+    reader_named->methods.push_back(NamedType::Method{"Read",       void_ty, true});
+    reader_named->methods.push_back(NamedType::Method{"ReadString", void_ty, true});
+    reader_named->methods.push_back(NamedType::Method{"Len",        int_ty2, true});
+
+    auto* reader_named_ty = arena.create<Type>();
+    reader_named_ty->kind = TypeKind::Named;
+    reader_named_ty->named = reader_named;
+
+    auto* reader_ptr_ty = arena.create<Type>();
+    reader_ptr_ty->kind = TypeKind::Pointer;
+    reader_ptr_ty->pointer.base = reader_named_ty;
+
+    g_strings_reader_ptr_type = reader_ptr_ty;
 
     return scope;
 }

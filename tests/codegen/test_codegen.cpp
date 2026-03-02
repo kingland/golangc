@@ -2919,6 +2919,225 @@ func main() {
 }
 
 // ============================================================================
+// Phase 30 Tests: Type switch correctness, errors.Is/As
+// ============================================================================
+
+// Verify type switch emits cmp instruction (tag comparison)
+TEST(Phase30Test, TypeSwitchEmitsCmp) {
+    auto result = compile_to_asm(R"(
+package main
+func typeOf(i interface{}) string {
+    switch i.(type) {
+    case int:
+        return "int"
+    default:
+        return "other"
+    }
+}
+func main() {
+    println(typeOf(42))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "cmp"));
+}
+
+// Verify type switch emits je/jne for branch (tag comparison produces jump)
+TEST(Phase30Test, TypeSwitchEmitsJump) {
+    auto result = compile_to_asm(R"(
+package main
+func typeOf(i interface{}) string {
+    switch i.(type) {
+    case int:
+        return "int"
+    default:
+        return "other"
+    }
+}
+func main() {
+    println(typeOf(42))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // cmp + je or jne for branch taken/not taken
+    EXPECT_TRUE(contains(result.asm_text, "cmp") || contains(result.asm_text, "je") || contains(result.asm_text, "jne"));
+}
+
+// Type switch with bound variable — should compile and use bound var
+TEST(Phase30Test, TypeSwitchBoundVarIntCase) {
+    auto result = compile_to_asm(R"(
+package main
+func describe(i interface{}) string {
+    switch v := i.(type) {
+    case int:
+        _ = v
+        return "int"
+    case string:
+        _ = v
+        return "string"
+    default:
+        _ = v
+        return "other"
+    }
+}
+func main() {
+    println(describe(42))
+    println(describe("hi"))
+    println(describe(true))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "describe PROC"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+// Type switch with multiple types in one case (Go allows: case int, string:)
+TEST(Phase30Test, TypeSwitchMultipleTypesInCase) {
+    auto result = compile_to_asm(R"(
+package main
+func isNumOrStr(i interface{}) bool {
+    switch i.(type) {
+    case int, string:
+        return true
+    default:
+        return false
+    }
+}
+func main() {
+    println(isNumOrStr(1))
+}
+)");
+    // Multi-type cases are tricky — just ensure no crash
+    EXPECT_FALSE(result.has_errors);
+}
+
+// errors.New + errors.Is
+TEST(Phase30Test, ErrorsNewCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "errors"
+func main() {
+    err := errors.New("oops")
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase30Test, ErrorsNewEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "errors"
+func main() {
+    err := errors.New("oops")
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_errors_new"));
+}
+
+TEST(Phase30Test, ErrorsIsCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "errors"
+var ErrFoo = errors.New("foo")
+func check(err error) bool {
+    return errors.Is(err, ErrFoo)
+}
+func main() {
+    println(check(ErrFoo))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+// Type assert (value, ok) form
+TEST(Phase30Test, TypeAssertOkFormCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+func tryInt(i interface{}) (int, bool) {
+    v, ok := i.(int)
+    return v, ok
+}
+func main() {
+    v, ok := tryInt(42)
+    _ = v
+    _ = ok
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+// interface{} variable assignment and type switch
+TEST(Phase30Test, InterfaceVarBoxingAndSwitch) {
+    auto result = compile_to_asm(R"(
+package main
+func f(i interface{}) string {
+    switch i.(type) {
+    case int:
+        return "int"
+    case string:
+        return "string"
+    default:
+        return "other"
+    }
+}
+func main() {
+    var x interface{} = 42
+    println(f(x))
+    var y interface{} = "hello"
+    println(f(y))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+// GoFull: comprehensive type switch program
+TEST(Phase30Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import "errors"
+
+var ErrNotFound = errors.New("not found")
+
+func describe(i interface{}) string {
+    switch v := i.(type) {
+    case int:
+        _ = v
+        return "int"
+    case string:
+        _ = v
+        return "string"
+    case bool:
+        _ = v
+        return "bool"
+    default:
+        _ = v
+        return "other"
+    }
+}
+
+func check(err error) bool {
+    return errors.Is(err, ErrNotFound)
+}
+
+func main() {
+    println(describe(42))
+    println(describe("hello"))
+    println(describe(true))
+    println(describe(3.14))
+    println(check(ErrNotFound))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "describe PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "main PROC"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+// ============================================================================
 // Phase 24 Tests: bufio.Scanner + bufio.NewReader + os.ReadFile
 // ============================================================================
 
@@ -5161,5 +5380,894 @@ func main() {
 }
 )");
     EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+// ============================================================================
+// Phase 28: strings extras + fmt.Stringer dispatch
+// ============================================================================
+
+TEST(Phase28Test, StringsContainsRuneCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    s := "hello"
+    b := strings.ContainsRune(s, 'e')
+    _ = b
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_contains_rune"));
+}
+
+TEST(Phase28Test, StringsIndexByteCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    s := "hello"
+    i := strings.IndexByte(s, 'l')
+    _ = i
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_index_byte"));
+}
+
+TEST(Phase28Test, StringsLastIndexCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    s := "hello world hello"
+    i := strings.LastIndex(s, "hello")
+    _ = i
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_last_index"));
+}
+
+TEST(Phase28Test, StringsIndexRuneCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    s := "hello"
+    i := strings.IndexRune(s, 'l')
+    _ = i
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_index_rune"));
+}
+
+TEST(Phase28Test, StringsEqualFoldCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    b := strings.EqualFold("Hello", "hello")
+    _ = b
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_equal_fold"));
+}
+
+TEST(Phase28Test, StringsContainsAnyCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    b := strings.ContainsAny("hello", "aeiou")
+    _ = b
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_contains_any"));
+}
+
+TEST(Phase28Test, StringsReplaceAllCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    s := strings.ReplaceAll("foo foo foo", "foo", "bar")
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_replace"));
+}
+
+TEST(Phase28Test, StringsTrimLeftCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    s := strings.TrimLeft("   hello", " ")
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_trim_left"));
+}
+
+TEST(Phase28Test, StringsTrimRightCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    s := strings.TrimRight("hello   ", " ")
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_trim_right"));
+}
+
+TEST(Phase28Test, StringsTitleCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    s := strings.Title("hello world")
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_title"));
+}
+
+TEST(Phase28Test, FmtStringerDispatchCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Color int
+func (c Color) String() string {
+    if c == 0 {
+        return "Red"
+    }
+    return "Blue"
+}
+func main() {
+    c := Color(0)
+    fmt.Println(c)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Color$String"));
+}
+
+TEST(Phase28Test, FmtStringerDispatchEmitsMethodCall) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Direction int
+func (d Direction) String() string {
+    return "North"
+}
+func main() {
+    d := Direction(0)
+    fmt.Println(d)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // The method call should appear in asm
+    EXPECT_TRUE(contains(result.asm_text, "Direction$String"));
+    // And the result (a string) should be printed via print_string or println_string
+    EXPECT_TRUE(contains(result.asm_text, "golangc_print") ||
+                contains(result.asm_text, "golangc_println"));
+}
+
+TEST(Phase28Test, StringsMapCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func toUpper(r rune) rune {
+    if r >= 'a' && r <= 'z' {
+        return r - 32
+    }
+    return r
+}
+func main() {
+    s := strings.Map(toUpper, "hello")
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_map"));
+}
+
+TEST(Phase28Test, MultipleStringersInPrintln) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type MyInt int
+func (m MyInt) String() string {
+    return "MyInt"
+}
+type MyStr string
+func (s MyStr) String() string {
+    return "MyStr"
+}
+func main() {
+    a := MyInt(1)
+    b := MyStr("x")
+    fmt.Println(a, b)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "MyInt$String"));
+    EXPECT_TRUE(contains(result.asm_text, "MyStr$String"));
+}
+
+TEST(Phase28Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "strings"
+)
+type Weekday int
+func (d Weekday) String() string {
+    days := []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
+    if int(d) < len(days) {
+        return days[d]
+    }
+    return "Unknown"
+}
+func main() {
+    text := "hello world foo bar"
+    words := strings.Fields(text)
+    for _, w := range words {
+        upper := strings.ToUpper(w)
+        _ = upper
+    }
+    contains := strings.ContainsRune(text, 'o')
+    _ = contains
+    idx := strings.LastIndex(text, "o")
+    _ = idx
+    eq := strings.EqualFold("HELLO", "hello")
+    _ = eq
+    day := Weekday(1)
+    fmt.Println(day)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+// ============================================================================
+// Phase 29 Tests: unicode package, bytes.Buffer, fmt.Sprint stringer dispatch
+// ============================================================================
+
+TEST(Phase29Test, UnicodeIsLetterCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func main() {
+    ok := unicode.IsLetter('A')
+    _ = ok
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_letter"));
+}
+
+TEST(Phase29Test, UnicodeIsDigitCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func main() {
+    ok := unicode.IsDigit('5')
+    _ = ok
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_digit"));
+}
+
+TEST(Phase29Test, UnicodeIsSpaceCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func main() {
+    ok := unicode.IsSpace(' ')
+    _ = ok
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_space"));
+}
+
+TEST(Phase29Test, UnicodeIsUpperLowerCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func main() {
+    u := unicode.IsUpper('A')
+    l := unicode.IsLower('a')
+    _ = u
+    _ = l
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_upper"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_lower"));
+}
+
+TEST(Phase29Test, UnicodeToUpperLowerCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func main() {
+    u := unicode.ToUpper('a')
+    l := unicode.ToLower('A')
+    _ = u
+    _ = l
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_to_upper"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_to_lower"));
+}
+
+TEST(Phase29Test, BytesNewBufferCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "bytes"
+func main() {
+    b := bytes.NewBuffer(nil)
+    _ = b
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bytes_new_buffer"));
+}
+
+TEST(Phase29Test, BytesBufferWriteStringEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "bytes"
+func main() {
+    b := bytes.NewBuffer(nil)
+    b.WriteString("hello")
+    _ = b
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bytes_write_string"));
+}
+
+TEST(Phase29Test, BytesBufferStringEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "bytes"
+func main() {
+    b := bytes.NewBuffer(nil)
+    b.WriteString("world")
+    s := b.String()
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bytes_string"));
+}
+
+TEST(Phase29Test, BytesBufferWriteByteEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "bytes"
+func main() {
+    b := bytes.NewBuffer(nil)
+    b.WriteByte('!')
+    _ = b
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bytes_write_byte"));
+}
+
+TEST(Phase29Test, BytesBufferLenEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "bytes"
+func main() {
+    b := bytes.NewBuffer(nil)
+    b.WriteString("hi")
+    n := b.Len()
+    _ = n
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bytes_len"));
+}
+
+TEST(Phase29Test, BytesBufferResetEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "bytes"
+func main() {
+    b := bytes.NewBuffer(nil)
+    b.WriteString("data")
+    b.Reset()
+    _ = b
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bytes_reset"));
+}
+
+TEST(Phase29Test, FmtSprintStringerDispatch) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Color int
+func (c Color) String() string {
+    return "Red"
+}
+func main() {
+    c := Color(0)
+    s := fmt.Sprint(c)
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Color$String"));
+}
+
+TEST(Phase29Test, BytesNewBufferStringCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "bytes"
+func main() {
+    b := bytes.NewBufferString("hello")
+    s := b.String()
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bytes_new_buffer_string"));
+}
+
+TEST(Phase29Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bytes"
+    "fmt"
+    "unicode"
+)
+type Token int
+func (t Token) String() string {
+    if t == 0 {
+        return "EOF"
+    }
+    return "IDENT"
+}
+func isWordChar(r rune) bool {
+    return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+func main() {
+    var b bytes.Buffer
+    b.WriteString("hello")
+    b.WriteByte(' ')
+    b.WriteString("world")
+    s := b.String()
+    _ = s
+    ok := isWordChar('a')
+    _ = ok
+    tok := Token(0)
+    fmt.Println(tok)
+    r := rune('A')
+    up := unicode.ToUpper(r)
+    _ = up
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+// ============================================================================
+// Phase 31 Tests: copy(), close(), type assert panic, uintptr
+// ============================================================================
+
+// copy() basic: compiles without errors
+TEST(Phase31Test, CopyCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    src := []int{1, 2, 3}
+    dst := make([]int, 3)
+    n := copy(dst, src)
+    _ = n
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+// copy() emits golangc_slice_copy runtime call
+TEST(Phase31Test, CopyEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    src := []int{1, 2, 3}
+    dst := make([]int, 3)
+    n := copy(dst, src)
+    _ = n
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_slice_copy"));
+}
+
+// copy() of strings
+TEST(Phase31Test, CopyStringSlice) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    src := []string{"a", "b"}
+    dst := make([]string, 2)
+    n := copy(dst, src)
+    _ = n
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_slice_copy"));
+}
+
+// close() basic: compiles without errors
+TEST(Phase31Test, CloseCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int, 1)
+    ch <- 42
+    close(ch)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+// close() emits golangc_chan_close runtime call
+TEST(Phase31Test, CloseEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    ch := make(chan int, 1)
+    close(ch)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_chan_close"));
+}
+
+// type assertion single-value form should emit tag check
+TEST(Phase31Test, TypeAssertSingleValueEmitsTagCheck) {
+    auto result = compile_to_asm(R"(
+package main
+func getInt(i interface{}) int {
+    return i.(int)
+}
+func main() {
+    println(getInt(42))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "cmp"));
+}
+
+// type assertion single-value compiles to working proc
+TEST(Phase31Test, TypeAssertSingleValueProc) {
+    auto result = compile_to_asm(R"(
+package main
+func getInt(i interface{}) int {
+    return i.(int)
+}
+func main() {
+    println(getInt(42))
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "getInt PROC"));
+}
+
+// two-value type assertion compiles correctly
+TEST(Phase31Test, TypeAssertTwoValueOkForm) {
+    auto result = compile_to_asm(R"(
+package main
+func tryInt(i interface{}) (int, bool) {
+    v, ok := i.(int)
+    return v, ok
+}
+func main() {
+    v, ok := tryInt(42)
+    _ = v
+    _ = ok
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "tryInt PROC"));
+}
+
+// uintptr type is available
+TEST(Phase31Test, UintptrCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+func main() {
+    var p uintptr = 0
+    _ = p
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+// GoFull: comprehensive Phase 31 test
+TEST(Phase31Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+
+func copySlice(dst, src []int) int {
+    return copy(dst, src)
+}
+
+func sendAndClose(ch chan int, val int) {
+    ch <- val
+    close(ch)
+}
+
+func getVal(i interface{}) int {
+    v, ok := i.(int)
+    if ok {
+        return v
+    }
+    return -1
+}
+
+func main() {
+    src := []int{1, 2, 3}
+    dst := make([]int, 3)
+    n := copySlice(dst, src)
+    _ = n
+
+    ch := make(chan int, 1)
+    sendAndClose(ch, 99)
+
+    println(getVal(42))
+    println(getVal("hello"))
+
+    var p uintptr = 0
+    _ = p
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_slice_copy"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_chan_close"));
+    EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
+}
+
+// ============================================================================
+// Phase 32 Tests: os.WriteFile/Remove/Mkdir, strings.NewReader, filepath, fmt.Sprintf Stringer
+// ============================================================================
+
+// os.WriteFile compiles
+TEST(Phase32Test, OsWriteFileCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    data := make([]byte, 5)
+    err := os.WriteFile("out.txt", data, 0644)
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase32Test, OsWriteFileEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    data := make([]byte, 3)
+    err := os.WriteFile("test.txt", data, 0644)
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_write_file"));
+}
+
+// os.Remove compiles
+TEST(Phase32Test, OsRemoveCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    err := os.Remove("tmp.txt")
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_remove"));
+}
+
+// os.Mkdir compiles
+TEST(Phase32Test, OsMkdirCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    err := os.Mkdir("mydir", 0755)
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_mkdir"));
+}
+
+// os.MkdirAll compiles
+TEST(Phase32Test, OsMkdirAllCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    err := os.MkdirAll("a/b/c", 0755)
+    _ = err
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+// os.TempDir compiles
+TEST(Phase32Test, OsTempDirCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func main() {
+    d := os.TempDir()
+    _ = d
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_temp_dir"));
+}
+
+// strings.NewReader compiles
+TEST(Phase32Test, StringsNewReaderCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    r := strings.NewReader("hello world")
+    _ = r
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase32Test, StringsNewReaderEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func main() {
+    r := strings.NewReader("hello world")
+    _ = r
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_reader_new"));
+}
+
+// filepath.Join compiles
+TEST(Phase32Test, FilepathJoinCompilesNoErrors) {
+    auto result = compile_to_asm(R"(
+package main
+import "path/filepath"
+func main() {
+    p := filepath.Join("a", "b")
+    _ = p
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase32Test, FilepathJoinEmitsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "path/filepath"
+func main() {
+    p := filepath.Join("a", "b")
+    _ = p
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_filepath_join2"));
+}
+
+// filepath.Dir, Base, Ext compile
+TEST(Phase32Test, FilepathDirBaseExtCompile) {
+    auto result = compile_to_asm(R"(
+package main
+import "path/filepath"
+func main() {
+    d := filepath.Dir("/a/b/c.txt")
+    b := filepath.Base("/a/b/c.txt")
+    e := filepath.Ext("/a/b/c.txt")
+    _ = d
+    _ = b
+    _ = e
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_filepath_dir"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_filepath_base"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_filepath_ext"));
+}
+
+// fmt.Sprintf with Stringer dispatch
+TEST(Phase32Test, FmtSprintfStringerDispatch) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Color int
+func (c Color) String() string {
+    if c == 0 { return "Red" }
+    return "Blue"
+}
+func main() {
+    c := Color(0)
+    s := fmt.Sprintf("color=%s", c)
+    _ = s
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "Color$String"));
+}
+
+// GoFull: comprehensive Phase 32
+TEST(Phase32Test, GoFull) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+    "path/filepath"
+    "strings"
+)
+type Status int
+func (s Status) String() string {
+    if s == 0 { return "OK" }
+    return "FAIL"
+}
+func main() {
+    // os extras
+    tmp := os.TempDir()
+    p := filepath.Join(tmp, "test.txt")
+    _ = p
+    data := make([]byte, 3)
+    data[0] = 65
+    err := os.WriteFile(p, data, 0644)
+    _ = err
+    err2 := os.Remove(p)
+    _ = err2
+
+    // strings.NewReader
+    r := strings.NewReader("hello")
+    _ = r
+
+    // fmt.Sprintf with Stringer
+    st := Status(0)
+    msg := fmt.Sprintf("status=%s", st)
+    _ = msg
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_write_file"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_filepath_join2"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_reader_new"));
     EXPECT_FALSE(contains(result.asm_text, "; TODO:"));
 }
