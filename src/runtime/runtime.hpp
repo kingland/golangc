@@ -594,6 +594,20 @@ int64_t golangc_rand_intn(int64_t n);
 /// Return a pseudo-random float64 in [0.0, 1.0).
 double golangc_rand_float64(void);
 
+// ---- Reference counting ----
+
+/// Increment the reference count of a heap-tracked object.
+/// p must be a pointer returned by an RC-allocating runtime function (or nullptr).
+void golangc_retain(void* ptr);
+
+/// Decrement the reference count of a heap-tracked object.
+/// Frees (and recursively tears down) the object when the count reaches zero.
+void golangc_release(void* ptr);
+
+/// Allocate a slice backing array of `byte_count` bytes with initial refcount=1.
+/// Replaces raw malloc() in slice-make codegen.
+void* golangc_rc_slice_alloc(int64_t byte_count);
+
 } // extern "C"
 
 /// Global closure env pointer — set by ClosureMake, read at indirect call sites.

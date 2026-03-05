@@ -142,6 +142,8 @@ namespace ir {
         case Opcode::Panic:          return "panic";
         case Opcode::Recover:        return "recover";
         case Opcode::Println:        return "println";
+        case Opcode::Retain:         return "retain";
+        case Opcode::Release:        return "release";
     }
     return "?";
 }

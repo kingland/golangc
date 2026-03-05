@@ -1,6 +1,4 @@
-#define NOMINMAX
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+#include "runtime/runtime_internal.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -11,30 +9,16 @@
 // Channel implementation
 // Unbuffered (buffer_cap == 0): two-semaphore rendezvous.
 // Buffered  (buffer_cap  > 0): ring buffer with counting semaphores.
+// (golangc_chan struct defined in runtime_internal.hpp)
 // ============================================================================
 
-struct golangc_chan {
-    CRITICAL_SECTION lock;
-    int64_t          elem_size;
-    int64_t          buffer_cap;   // 0 = unbuffered
-
-    // --- Unbuffered fields (used when buffer_cap == 0) ---
-    HANDLE  sender_ready;  // Semaphore: sender has parked data (initial=0)
-    HANDLE  recv_ready;    // Semaphore: receiver has consumed data (initial=0)
-    void*   data_ptr;      // Points into sender's live stack frame
-
-    // --- Buffered fields (used when buffer_cap > 0) ---
-    void*   buffer;        // heap: buffer_cap * elem_size bytes
-    int64_t head;          // read index (mod buffer_cap)
-    int64_t tail;          // write index (mod buffer_cap)
-    HANDLE  not_full;      // counting semaphore, initial = buffer_cap
-    HANDLE  not_empty;     // counting semaphore, initial = 0
-};
+// Forward declaration for RC allocator defined in rc.cpp
+extern void* rc_alloc_chan();
 
 extern "C" {
 
 golangc_chan* golangc_chan_make(int64_t elem_size, int64_t buffer_cap) {
-    auto* ch = static_cast<golangc_chan*>(std::malloc(sizeof(golangc_chan)));
+    auto* ch = static_cast<golangc_chan*>(rc_alloc_chan());
     if (!ch) return nullptr;
     InitializeCriticalSection(&ch->lock);
     ch->elem_size   = elem_size;

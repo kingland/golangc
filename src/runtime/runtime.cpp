@@ -1,4 +1,5 @@
 #include "runtime/runtime.hpp"
+#include "runtime/runtime_internal.hpp"
 
 #include <cstdarg>
 #include <cstdio>
@@ -8,6 +9,10 @@
 #include <cctype>
 #include <cmath>
 #include <vector>
+
+// Forward declarations for RC allocators defined in rc.cpp
+extern void* rc_alloc_string(size_t bytes);
+extern void* rc_alloc_map();
 
 // Global closure environment pointer — set by ClosureMake before calling Ret,
 // read at indirect call sites to pass as hidden env arg.
@@ -65,7 +70,7 @@ void golangc_string_concat(char* sret_out,
                             const char* ptr1, int64_t len1,
                             const char* ptr2, int64_t len2) {
     int64_t total = len1 + len2;
-    char* buf = static_cast<char*>(malloc(static_cast<size_t>(total) + 1));
+    char* buf = static_cast<char*>(rc_alloc_string(static_cast<size_t>(total) + 1));
     if (buf) {
         if (ptr1 && len1 > 0) memcpy(buf, ptr1, static_cast<size_t>(len1));
         if (ptr2 && len2 > 0) memcpy(buf + len1, ptr2, static_cast<size_t>(len2));
@@ -94,21 +99,8 @@ int64_t golangc_string_eq(const char* ptr1, int64_t len1,
 
 // ============================================================================
 // Map runtime — open-addressing hash table with FNV-1a key hashing
+// (MapBucket and golangc_map structs are defined in runtime_internal.hpp)
 // ============================================================================
-
-// Internal bucket — stores heap copies of key and value
-struct MapBucket {
-    void*  key;       // malloc'd copy of the key bytes (nullptr = empty)
-    void*  val;       // malloc'd copy of the value bytes
-};
-
-struct golangc_map {
-    int64_t    key_size;
-    int64_t    val_size;
-    int64_t    count;
-    int64_t    capacity;   // Always a power of two
-    MapBucket* buckets;
-};
 
 static uint64_t fnv1a(const void* data, size_t len) {
     const uint8_t* p = static_cast<const uint8_t*>(data);
@@ -175,7 +167,7 @@ static void map_resize(golangc_map* m) {
 }
 
 golangc_map* golangc_map_make(int64_t key_size, int64_t val_size) {
-    auto* m = static_cast<golangc_map*>(malloc(sizeof(golangc_map)));
+    auto* m = static_cast<golangc_map*>(rc_alloc_map());
     if (!m) return nullptr;
     m->key_size = key_size;
     m->val_size = val_size;
@@ -316,10 +308,12 @@ void golangc_slice_append(void* slice_out, const void* elem_ptr, int64_t elem_si
         // Grow: double capacity (minimum 8)
         int64_t new_cap = *s_cap * 2;
         if (new_cap < 8) new_cap = 8;
-        void* new_ptr = malloc(static_cast<size_t>(new_cap * elem_size));
+        void* old_ptr = *s_ptr;
+        void* new_ptr = golangc_rc_slice_alloc(new_cap * elem_size);
         if (!new_ptr) return;
-        if (*s_ptr && *s_len > 0)
-            memcpy(new_ptr, *s_ptr, static_cast<size_t>(*s_len * elem_size));
+        if (old_ptr && *s_len > 0)
+            memcpy(new_ptr, old_ptr, static_cast<size_t>(*s_len * elem_size));
+        golangc_release(old_ptr);  // drop old backing array (refcount was 1)
         *s_ptr = new_ptr;
         *s_cap = new_cap;
     }
@@ -413,7 +407,7 @@ void golangc_itoa(char* sret_out, int64_t value) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(value));
     if (len < 0) len = 0;
-    char* s = static_cast<char*>(malloc(static_cast<size_t>(len) + 1));
+    char* s = static_cast<char*>(rc_alloc_string(static_cast<size_t>(len) + 1));
     if (s) {
         memcpy(s, buf, static_cast<size_t>(len) + 1);
     }
@@ -444,8 +438,52 @@ int64_t golangc_atoi(const void* str_struct_ptr) {
 // String formatting (fmt)
 // ============================================================================
 
+// ============================================================================
+// fmt_custom helpers
+// ============================================================================
+
+// fmt_binary: render int64 in base-2 into buf (cap bytes). Returns char count.
+static int fmt_binary(char* buf, int cap, int64_t val) {
+    if (cap < 2) return 0;
+    if (val == 0) { buf[0] = '0'; buf[1] = '\0'; return 1; }
+    uint64_t u = static_cast<uint64_t>(val);
+    char tmp[65]; int i = 64; tmp[i] = '\0';
+    while (u) { tmp[--i] = static_cast<char>('0' + (u & 1)); u >>= 1; }
+    int len = 64 - i;
+    if (len < cap) { memcpy(buf, tmp + i, static_cast<size_t>(len) + 1); }
+    else { memcpy(buf, tmp + i, static_cast<size_t>(cap - 1)); buf[cap-1] = '\0'; len = cap - 1; }
+    return len;
+}
+
+// fmt_quoted: render string as Go-quoted literal into buf. Returns char count.
+static int fmt_quoted(char* buf, int cap, const char* s, int64_t slen) {
+    int out = 0;
+    auto emit = [&](char c) { if (out < cap - 1) buf[out++] = c; };
+    emit('"');
+    for (int64_t idx = 0; idx < slen; ++idx) {
+        unsigned char c = static_cast<unsigned char>(s[idx]);
+        switch (c) {
+            case '"':  emit('\\'); emit('"');  break;
+            case '\\': emit('\\'); emit('\\'); break;
+            case '\n': emit('\\'); emit('n');  break;
+            case '\t': emit('\\'); emit('t');  break;
+            case '\r': emit('\\'); emit('r');  break;
+            default:
+                if (c < 32 || c == 127) {
+                    int w = snprintf(buf + out, static_cast<size_t>(cap - out), "\\x%02x", c);
+                    if (w > 0) out += w;
+                } else {
+                    emit(static_cast<char>(c));
+                }
+        }
+    }
+    emit('"');
+    buf[out] = '\0';
+    return out;
+}
+
 // Custom format loop — handles Go's {ptr,len} string representation.
-// Supports %d (int64), %s (string ptr+len), %v (same as %d for numbers).
+// Supports full format grammar: %[flags][width][.prec]verb
 // buf/buf_cap: output buffer; returns bytes written.
 static int fmt_custom(char* buf, int buf_cap,
                       const char* fmt_ptr, int64_t fmt_len,
@@ -458,41 +496,143 @@ static int fmt_custom(char* buf, int buf_cap,
             continue;
         }
         if (i >= fmt_len) break;
+
+        // --- Parse flags ---
+        bool flag_plus  = false;
+        bool flag_minus = false;
+        bool flag_zero  = false;
+        bool flag_space = false;
+        bool flag_hash  = false;
+        while (i < fmt_len) {
+            char f = fmt_ptr[i];
+            if      (f == '+') { flag_plus  = true; ++i; }
+            else if (f == '-') { flag_minus = true; ++i; }
+            else if (f == '0') { flag_zero  = true; ++i; }
+            else if (f == ' ') { flag_space = true; ++i; }
+            else if (f == '#') { flag_hash  = true; ++i; }
+            else break;
+        }
+        (void)flag_space; (void)flag_hash; // reserved for future use
+
+        // --- Parse width ---
+        int width = 0;
+        while (i < fmt_len && fmt_ptr[i] >= '0' && fmt_ptr[i] <= '9') {
+            width = width * 10 + (fmt_ptr[i++] - '0');
+        }
+
+        // --- Parse precision ---
+        int prec = -1;
+        if (i < fmt_len && fmt_ptr[i] == '.') {
+            ++i;
+            prec = 0;
+            while (i < fmt_len && fmt_ptr[i] >= '0' && fmt_ptr[i] <= '9') {
+                prec = prec * 10 + (fmt_ptr[i++] - '0');
+            }
+        }
+
+        if (i >= fmt_len) break;
         char verb = fmt_ptr[i++];
+
+        // --- Generate value string ---
+        char tmp[256];
+        int  tmp_len = 0;
+        const char* tmp_ptr = tmp; // may point elsewhere for %s
+
         if (verb == '%') {
             buf[out++] = '%';
             continue;
-        }
-        if (verb == 'd' || verb == 'v') {
+        } else if (verb == 'd' || verb == 'v' || verb == 'i') {
             int64_t n = va_arg(ap, int64_t);
-            char tmp[32];
-            int w = snprintf(tmp, sizeof(tmp), "%lld", static_cast<long long>(n));
-            if (w > 0 && out + w < buf_cap) {
-                memcpy(buf + out, tmp, static_cast<size_t>(w));
-                out += w;
-            }
+            tmp_len = snprintf(tmp, sizeof(tmp),
+                               flag_plus ? "%+lld" : "%lld",
+                               static_cast<long long>(n));
+        } else if (verb == 'b') {
+            int64_t n = va_arg(ap, int64_t);
+            tmp_len = fmt_binary(tmp, static_cast<int>(sizeof(tmp)), n);
+        } else if (verb == 'o') {
+            int64_t n = va_arg(ap, int64_t);
+            tmp_len = snprintf(tmp, sizeof(tmp), "%llo",
+                               static_cast<unsigned long long>(static_cast<uint64_t>(n)));
+        } else if (verb == 'x') {
+            int64_t n = va_arg(ap, int64_t);
+            tmp_len = snprintf(tmp, sizeof(tmp), "%llx",
+                               static_cast<unsigned long long>(static_cast<uint64_t>(n)));
+        } else if (verb == 'X') {
+            int64_t n = va_arg(ap, int64_t);
+            tmp_len = snprintf(tmp, sizeof(tmp), "%llX",
+                               static_cast<unsigned long long>(static_cast<uint64_t>(n)));
+        } else if (verb == 'f') {
+            double d = va_arg(ap, double);
+            int p = (prec >= 0) ? prec : 6;
+            tmp_len = snprintf(tmp, sizeof(tmp), "%.*f", p, d);
+        } else if (verb == 'e') {
+            double d = va_arg(ap, double);
+            int p = (prec >= 0) ? prec : 6;
+            tmp_len = snprintf(tmp, sizeof(tmp), "%.*e", p, d);
+        } else if (verb == 'E') {
+            double d = va_arg(ap, double);
+            int p = (prec >= 0) ? prec : 6;
+            tmp_len = snprintf(tmp, sizeof(tmp), "%.*E", p, d);
+        } else if (verb == 'g') {
+            double d = va_arg(ap, double);
+            if (prec >= 0)
+                tmp_len = snprintf(tmp, sizeof(tmp), "%.*g", prec, d);
+            else
+                tmp_len = snprintf(tmp, sizeof(tmp), "%g", d);
+        } else if (verb == 'G') {
+            double d = va_arg(ap, double);
+            if (prec >= 0)
+                tmp_len = snprintf(tmp, sizeof(tmp), "%.*G", prec, d);
+            else
+                tmp_len = snprintf(tmp, sizeof(tmp), "%G", d);
         } else if (verb == 's') {
             // String args arrive as GoString* (large struct passed by address).
             const GoString* gs = va_arg(ap, const GoString*);
-            const char* sp = gs ? gs->ptr : nullptr;
-            int64_t sl    = gs ? gs->len : 0;
-            if (sp && sl > 0) {
-                int copy = (int)sl;
-                if (out + copy >= buf_cap) copy = buf_cap - out - 1;
-                memcpy(buf + out, sp, static_cast<size_t>(copy));
-                out += copy;
-            }
-        } else if (verb == 'f' || verb == 'g') {
-            double d = va_arg(ap, double);
-            char tmp[64];
-            int w = snprintf(tmp, sizeof(tmp), verb == 'f' ? "%f" : "%g", d);
-            if (w > 0 && out + w < buf_cap) {
-                memcpy(buf + out, tmp, static_cast<size_t>(w));
-                out += w;
-            }
+            tmp_ptr = gs ? gs->ptr : "";
+            tmp_len = static_cast<int>(gs ? gs->len : 0);
+            // For %s we skip the tmp[] buffer and use tmp_ptr directly.
+        } else if (verb == 'q') {
+            const GoString* gs = va_arg(ap, const GoString*);
+            const char* sp = gs ? gs->ptr : "";
+            int64_t sl     = gs ? gs->len  : 0;
+            tmp_len = fmt_quoted(tmp, static_cast<int>(sizeof(tmp)), sp, sl);
+        } else if (verb == 't') {
+            int64_t n = va_arg(ap, int64_t);
+            tmp_ptr = n ? "true" : "false";
+            tmp_len = static_cast<int>(strlen(tmp_ptr));
+        } else if (verb == 'p') {
+            int64_t n = va_arg(ap, int64_t);
+            tmp_len = snprintf(tmp, sizeof(tmp), "0x%llx",
+                               static_cast<unsigned long long>(static_cast<uint64_t>(n)));
         } else {
             // Unknown verb — emit as-is
             if (out + 2 < buf_cap) { buf[out++] = '%'; buf[out++] = verb; }
+            continue;
+        }
+
+        if (tmp_len < 0) tmp_len = 0;
+
+        // --- Apply padding ---
+        int pad = width - tmp_len;
+        if (pad > 0 && !flag_minus) {
+            char pad_char = (flag_zero && (verb == 'd' || verb == 'i' || verb == 'v'
+                                           || verb == 'o' || verb == 'x' || verb == 'X'
+                                           || verb == 'f' || verb == 'e' || verb == 'E'
+                                           || verb == 'g' || verb == 'G')) ? '0' : ' ';
+            for (int p = 0; p < pad && out < buf_cap - 1; ++p)
+                buf[out++] = pad_char;
+        }
+        // Emit value
+        int copy = tmp_len;
+        if (out + copy >= buf_cap) copy = buf_cap - out - 1;
+        if (copy > 0) {
+            memcpy(buf + out, tmp_ptr, static_cast<size_t>(copy));
+            out += copy;
+        }
+        // Right-pad for left-align
+        if (pad > 0 && flag_minus) {
+            for (int p = 0; p < pad && out < buf_cap - 1; ++p)
+                buf[out++] = ' ';
         }
     }
     buf[out] = '\0';
@@ -507,7 +647,7 @@ void golangc_sprintf(char* sret_out, const GoString* fmt, ...) {
     va_start(ap, fmt);
     int len = fmt_custom(buf, sizeof(buf), fmt ? fmt->ptr : "", fmt ? fmt->len : 0, ap);
     va_end(ap);
-    char* s = static_cast<char*>(malloc(static_cast<size_t>(len) + 1));
+    char* s = static_cast<char*>(rc_alloc_string(static_cast<size_t>(len) + 1));
     if (s) memcpy(s, buf, static_cast<size_t>(len) + 1);
     *reinterpret_cast<char**>(sret_out) = s;
     *reinterpret_cast<int64_t*>(sret_out + 8) = static_cast<int64_t>(len);
@@ -558,7 +698,7 @@ void golangc_rune_to_string(char* sret_out, int32_t rune_val) {
         buf[2] = static_cast<char>(0x80 | ((r >> 6)  & 0x3F));
         buf[3] = static_cast<char>(0x80 | (r & 0x3F)); len = 4;
     }
-    char* s = static_cast<char*>(malloc(static_cast<size_t>(len) + 1));
+    char* s = static_cast<char*>(rc_alloc_string(static_cast<size_t>(len) + 1));
     if (s) {
         memcpy(s, buf, static_cast<size_t>(len) + 1);
     }
@@ -1224,7 +1364,7 @@ void golangc_builder_write_byte(golangc_builder* b, int64_t byte_val) {
 void golangc_builder_string(char* sret_out, golangc_builder* b) {
     if (!b || !sret_out) return;
     // Copy buffer into a heap string (caller does not own builder's buf).
-    char* out = static_cast<char*>(std::malloc(static_cast<size_t>(b->len + 1)));
+    char* out = static_cast<char*>(rc_alloc_string(static_cast<size_t>(b->len + 1)));
     if (!out) {
         std::memset(sret_out, 0, 16);
         return;

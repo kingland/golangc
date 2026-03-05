@@ -165,6 +165,20 @@ void IRGenerator::gen_assign(ast::AssignStmt& stmt) {
 
         auto* lhs_addr = gen_addr(lhs_expr);
         if (lhs_addr) {
+            // Release old RC value if this alloca is tracked
+            auto* lhs_alloca = dynamic_cast<Instruction*>(lhs_addr);
+            if (lhs_alloca && rc_vars_.count(lhs_alloca)) {
+                auto* old_val = builder_.create_load(
+                    lhs_alloca, type_map_.ptr_type(), "rc.old");
+                builder_.create_release(old_val, "rc.rel.old");
+                // Update rc_vars_: new RHS may or may not be RC-producing
+                auto* rhs_inst = dynamic_cast<const Instruction*>(rhs);
+                if (rhs_inst && is_rc_producing(rhs_inst->opcode)) {
+                    rc_vars_[lhs_alloca] = rhs_inst->opcode;
+                } else {
+                    rc_vars_.erase(lhs_alloca);
+                }
+            }
             builder_.create_store(rhs, lhs_addr);
         }
     }
@@ -306,17 +320,44 @@ void IRGenerator::gen_short_var_decl(ast::ShortVarDeclStmt& stmt) {
         auto* alloca = builder_.create_alloca(var_type, std::string(ident.name) + ".addr");
         builder_.create_store(rhs, alloca);
         var_map_[info->symbol] = alloca;
+
+        // Register RC-producing allocas for scope-exit release
+        auto* rhs_inst = dynamic_cast<const Instruction*>(rhs);
+        if (rhs_inst && is_rc_producing(rhs_inst->opcode)) {
+            rc_vars_[alloca] = rhs_inst->opcode;
+        }
     }
 }
 
 void IRGenerator::gen_return(ast::ReturnStmt& stmt) {
     if (stmt.results.count == 0) {
+        // Release all RC locals before returning
+        for (auto& [alloca_ptr, origin_op] : rc_vars_) {
+            auto* loaded = builder_.create_load(
+                alloca_ptr, type_map_.ptr_type(), "rc.load");
+            builder_.create_release(loaded, "rc.rel");
+        }
+        rc_vars_.clear();
         builder_.create_ret();
         return;
     }
 
     if (stmt.results.count == 1) {
         auto* val = gen_expr(stmt.results[0]);
+        // Suppress scope-exit release for the returned RC value
+        // (caller takes ownership — no Release should happen on function exit)
+        auto* load_inst = dynamic_cast<const Instruction*>(val);
+        if (load_inst && load_inst->opcode == Opcode::Load
+            && !load_inst->operands.empty()) {
+            rc_vars_.erase(load_inst->operands[0]);
+        }
+        // Release all other RC locals before returning
+        for (auto& [alloca_ptr, origin_op] : rc_vars_) {
+            auto* loaded = builder_.create_load(
+                alloca_ptr, type_map_.ptr_type(), "rc.load");
+            builder_.create_release(loaded, "rc.rel");
+        }
+        rc_vars_.clear();
         builder_.create_ret(val);
         return;
     }
@@ -327,9 +368,24 @@ void IRGenerator::gen_return(ast::ReturnStmt& stmt) {
     if (!tuple_type || !tuple_type->is_struct()) {
         // Fallback: just return the first value
         auto* val = gen_expr(stmt.results[0]);
+        // Release all RC locals before fallback return
+        for (auto& [alloca_ptr, origin_op] : rc_vars_) {
+            auto* loaded = builder_.create_load(
+                alloca_ptr, type_map_.ptr_type(), "rc.load");
+            builder_.create_release(loaded, "rc.rel");
+        }
+        rc_vars_.clear();
         builder_.create_ret(val);
         return;
     }
+
+    // Release all RC locals before multi-return
+    for (auto& [alloca_ptr, origin_op] : rc_vars_) {
+        auto* loaded = builder_.create_load(
+            alloca_ptr, type_map_.ptr_type(), "rc.load");
+        builder_.create_release(loaded, "rc.rel");
+    }
+    rc_vars_.clear();
 
     // Start with a nil/zero struct
     auto* packed = builder_.create_const_nil(tuple_type, "ret.pack");
@@ -1090,6 +1146,11 @@ void IRGenerator::gen_local_var_spec(ast::VarSpec& spec) {
                     }
                 }
                 builder_.create_store(val, alloca);
+                // Register RC-producing allocas for scope-exit release
+                auto* val_inst = dynamic_cast<const Instruction*>(val);
+                if (val_inst && is_rc_producing(val_inst->opcode)) {
+                    rc_vars_[alloca] = val_inst->opcode;
+                }
             }
         } else {
             // Zero-value init: opaque types → call their make functions

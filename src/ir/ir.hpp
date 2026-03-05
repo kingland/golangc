@@ -127,6 +127,10 @@ enum class Opcode : uint8_t {
     Neg,
     // Float negation
     FNeg,
+
+    // Reference counting
+    Retain,   // golangc_retain(ptr)  — no-value side-effecting call
+    Release,  // golangc_release(ptr) — no-value side-effecting call
 };
 
 /// Return the name of an opcode.

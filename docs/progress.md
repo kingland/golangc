@@ -1,7 +1,7 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 35.5 (GoString ABI fix + string escape processing + samples/files_demo.go compile success)
-## Current Milestone: GoString ABI corrected - removed phantom `int64_t ignored` params; string escape sequences now processed; files_demo.go compiles and runs correctly; 840 total tests still passing
+## Current Phase: 38A (RC Completeness)
+## Current Milestone: RC gap-fill for var decls, reassignment, explicit return; 894 total tests passing
 ## Completion Estimate: 99%
 
 ## Component Status
@@ -20,6 +20,19 @@
 
 ## Detailed Progress Log
 
+### Session 37A - Phase 37A: RC Completeness (2026-03-05)
+#### Completed
+- **Gap 1 — `gen_local_var_spec`**: `var s string = a+b` and similar `var` declarations with RC-producing RHS values now register the alloca in `rc_vars_`. Previously only `:=` (short var decl) was tracked, so `var` decls leaked on scope exit.
+- **Gap 2 — `gen_assign`**: Reassignment to a tracked alloca (`s = newVal`) now loads the old value and emits `golangc_release` before storing the new value. `rc_vars_` is updated: if the new RHS is also RC-producing the alloca stays tracked, otherwise it is erased. Prevents the old heap object from leaking on overwrite.
+- **Gap 3 — `gen_return`**: All three explicit return paths (zero-result, single-value, multi-value + fallback) now emit `Load + golangc_release` for every remaining entry in `rc_vars_` before the `ret` instruction. The single-value path still suppresses releasing the returned value itself (caller takes ownership). Previously explicit `return` skipped all releases — those locals leaked.
+- **12 new `RCTest` tests** (RC38A suite): VarDeclStringConcatEmitsRelease, VarDeclMapMakeEmitsRelease, VarDeclSliceMakeEmitsRelease, AssignOverwriteEmitsRelease, AssignOverwriteNonRCReleasesOld, ExplicitReturnVoidReleasesRC, ExplicitReturnNonRCNoRelease, ExplicitReturnStringReleasesOtherRC, ExplicitReturnReleasesAllWhenNoneReturned, MultiReturnReleasesRC, AssignToTrackedVarTwiceReleasesOld, VarDeclThenExplicitReturn
+- **894 total tests passing** (882 existing + 12 new, 0 regressions)
+#### Files Modified
+- `src/ir/ir_gen_stmt.cpp` — 3 targeted edits (gen_local_var_spec, gen_assign, gen_return)
+- `tests/codegen/test_codegen.cpp` — 12 new RC38A tests appended to RCTest suite
+#### Next Steps
+- Phase 38: math/bits, unicode extras, bytes.Buffer improvements, more stdlib
+
 ### Session 35.5 - GoString ABI Fix + String Escape Processing (2026-03-02)
 #### Completed
 - **GoString ABI fix (root cause)**: Removed ALL `int64_t ignored`/`fmt_ignored`/`str_ignored` dummy parameters from runtime functions taking `const GoString*`. The codegen passes Go strings as large structs by-pointer (LEA, single pointer = 1 register slot), NOT as `(char*, int64_t)` pairs. Phantom `ignored` params were consuming real subsequent arguments, causing segfaults. Fixed in `runtime.hpp`, `runtime.cpp`, `os_file.cpp`, `os_extras.cpp`, `strconv_ext.cpp`, `bufio.cpp`, `fmt_scan.cpp`.
@@ -30,6 +43,38 @@
 - **840 tests still passing** (no regressions)
 #### Next Steps
 - Phase 36: more fmt verbs (%f, %e, %g for floats; %b, %o, %x for ints), additional runtime improvements
+
+### Session 37 - Phase 37: Reference Counting for Heap Objects (2026-03-04)
+#### Completed
+- **`src/runtime/runtime_internal.hpp` created**: Shared `MapBucket`, `golangc_map`, `golangc_chan` struct defs (moved from runtime.cpp / goroutine_channel.cpp). Both files now `#include "runtime/runtime_internal.hpp"`.
+- **`src/runtime/rc.cpp` created**: Inline-prefix RC system with 8-byte `RCHeader {refcount, type_tag}` prefixed before every tracked heap object. `rc_alloc_string/map/chan` internal helpers; public `golangc_retain/golangc_release/golangc_rc_slice_alloc` C API. `rc_free` dispatches by type_tag: string/slice = free header; map = free bucket key/val, then buckets, then header; chan = CloseHandle semaphores, DeleteCriticalSection, free header.
+- **`runtime.hpp` updated**: Added `golangc_retain`, `golangc_release`, `golangc_rc_slice_alloc` declarations.
+- **`runtime.cpp` updated**: 5 malloc→rc_alloc_string calls (string_concat, itoa, rune_to_string, sprintf, builder_string); map_make malloc→rc_alloc_map; slice_append growth path uses golangc_rc_slice_alloc + golangc_release(old_ptr).
+- **`goroutine_channel.cpp` updated**: chan_make malloc→rc_alloc_chan.
+- **IR opcodes**: Added `Retain` / `Release` to `Opcode` enum; `opcode_name` cases; IR printer support; IR builder `create_retain`/`create_release` via `emit_unary`.
+- **IR gen**: `rc_vars_` map (alloca → origin opcode) in `IRGenerator`; `is_rc_producing()` helper for StringConcat/SliceMake/MapMake/ChanMake; `gen_short_var_decl` registers RC allocas; `gen_return` suppresses release for returned single value; `gen_func_decl` emits scope-exit Load+Release for all rc_vars_ before fall-through ret.
+- **Codegen**: `golangc_retain/release/rc_slice_alloc` added to `k_hardcoded_runtime`; `Retain`/`Release` in prescan_temps no-value list; `emit_slice_make` uses `golangc_rc_slice_alloc` instead of `malloc`; `emit_retain`/`emit_release` emitters added; dispatch in `emit_instruction`.
+- **CMakeLists.txt**: `runtime/rc.cpp` added to `golangc_runtime`.
+- **17 new `RCTest` tests**: StringConcatEmitsRelease, ExternsDeclared, SliceMakeEmitsRelease, MapMakeEmitsRelease, ChanMakeEmitsRelease, SliceMakeUsesRCAlloc, NoRCForStringLiteral, NoRCForInts, NoRCForParams, MultipleRCVarsGetReleased, RcSliceAllocExternDeclared, RCFuncReturnNoRelease, StringConcatAssignTwice, RcRetainExternPresent, RcReleaseExternPresent, IRTextContainsRelease, SliceMakeVarLenUsesRCAlloc
+- **882 total tests passing** (865 existing + 17 new, 0 regressions)
+#### Next Steps
+- Phase 38: math/bits, unicode extras, bytes.Buffer improvements, more stdlib
+
+### Session 36 - Phase 36: fmt verb improvements (2026-03-04)
+#### Completed
+- **Full `fmt_custom()` rewrite** in `src/runtime/runtime.cpp`: proper format parser supporting `%[flags][width][.prec]verb`
+  - Flags: `+`, `-`, `0`, ` `, `#`
+  - Width: decimal digits for field width
+  - Precision: `.digits` for float precision / string truncation
+  - New verbs: `%b` (binary int), `%o` (octal), `%x`/`%X` (hex lower/upper), `%e`/`%E` (scientific float), `%G` (shortest float upper), `%q` (Go-quoted string), `%t` (bool), `%p` (pointer hex), `%i` (alias for `%d`)
+  - Existing verbs improved: `%f` with precision, `%g` with precision, `%d` with `+` flag
+  - `fmt_binary()` helper for base-2 rendering (no snprintf verb for `%b`)
+  - `fmt_quoted()` helper for Go-style double-quoted string escaping
+  - Padding/alignment: right-pad (default), left-pad (`-` flag), zero-pad (`0` flag for numeric verbs)
+- **25 new `FmtVerb36Test` tests** covering all new verbs and flags
+- **865 total tests passing** (840 existing + 25 new, 0 regressions)
+#### Next Steps
+- Phase 37: additional stdlib (math/bits, unicode, bytes package), more fmt Stringer auto-dispatch improvements
 
 ### Session 35 - Phase 35: os.File.Read/Write/Seek, os.Rename, Builder.WriteString fix (2026-03-02)
 #### Completed

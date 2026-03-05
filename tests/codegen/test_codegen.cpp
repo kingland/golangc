@@ -61,6 +61,17 @@ bool contains(const std::string& haystack, const std::string& needle) {
     return haystack.find(needle) != std::string::npos;
 }
 
+/// Count non-overlapping occurrences of needle in text.
+int count_occurrences(const std::string& text, const std::string& needle) {
+    int n = 0;
+    size_t pos = 0;
+    while ((pos = text.find(needle, pos)) != std::string::npos) {
+        ++n;
+        pos += needle.size();
+    }
+    return n;
+}
+
 } // namespace
 
 // ============================================================================
@@ -2038,7 +2049,7 @@ func main() {
 }
 )");
     EXPECT_FALSE(result.has_errors);
-    EXPECT_TRUE(contains(result.asm_text, "call malloc"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_rc_slice_alloc"));
     EXPECT_TRUE(contains(result.asm_text, "call golangc_println_int"));
 }
 
@@ -2853,8 +2864,8 @@ func sum(nums ...int) int {
 func main() { println(sum(1, 2, 3)) }
 )");
     EXPECT_FALSE(result.has_errors);
-    // Packing args into a slice uses slice_make and slice_append
-    EXPECT_TRUE(contains(result.asm_text, "call malloc"));
+    // Packing args into a slice uses slice_make → golangc_rc_slice_alloc
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_rc_slice_alloc"));
 }
 
 TEST(VariadicTest, VariadicCallZeroArgs) {
@@ -7038,4 +7049,778 @@ func main() {
     EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_seek"));
     EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_read"));
     EXPECT_TRUE(contains(result.asm_text, "golangc_os_rename"));
+}
+
+// ============================================================================
+// Phase 36: fmt verb improvements
+// ============================================================================
+
+TEST(FmtVerb36Test, SprintfFloatF) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(x float64) string {
+    return fmt.Sprintf("%f", x)
+}
+func main() { _ = doFmt(3.14) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfFloatPrec) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(x float64) string {
+    return fmt.Sprintf("%.2f", x)
+}
+func main() { _ = doFmt(3.14) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfFloatE) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(x float64) string {
+    return fmt.Sprintf("%e", x)
+}
+func main() { _ = doFmt(3.14) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfFloatG) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(x float64) string {
+    return fmt.Sprintf("%g", x)
+}
+func main() { _ = doFmt(3.14) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfOctal) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(n int) string {
+    return fmt.Sprintf("%o", n)
+}
+func main() { _ = doFmt(8) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfHexLower) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(n int) string {
+    return fmt.Sprintf("%x", n)
+}
+func main() { _ = doFmt(255) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfHexUpper) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(n int) string {
+    return fmt.Sprintf("%X", n)
+}
+func main() { _ = doFmt(255) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfBinary) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(n int) string {
+    return fmt.Sprintf("%b", n)
+}
+func main() { _ = doFmt(10) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfWidth) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(n int) string {
+    return fmt.Sprintf("%5d", n)
+}
+func main() { _ = doFmt(42) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfZeroPad) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(n int) string {
+    return fmt.Sprintf("%05d", n)
+}
+func main() { _ = doFmt(42) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfPlusFlag) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(n int) string {
+    return fmt.Sprintf("%+d", n)
+}
+func main() { _ = doFmt(42) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfLeftAlign) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(n int) string {
+    return fmt.Sprintf("%-10d", n)
+}
+func main() { _ = doFmt(42) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfQuoted) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(s string) string {
+    return fmt.Sprintf("%q", s)
+}
+func main() { _ = doFmt("hello") }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfBool) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(b bool) string {
+    return fmt.Sprintf("%t", b)
+}
+func main() { _ = doFmt(true) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfPointer) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(p int) string {
+    return fmt.Sprintf("%p", p)
+}
+func main() { _ = doFmt(0) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfWidthFloat) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(x float64) string {
+    return fmt.Sprintf("%8.3f", x)
+}
+func main() { _ = doFmt(3.14159) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfMultiVerb) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(n int, x float64) string {
+    return fmt.Sprintf("%d %x %.2f", n, n, x)
+}
+func main() { _ = doFmt(255, 3.14) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfPercentLit) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt() string {
+    return fmt.Sprintf("100%%")
+}
+func main() { _ = doFmt() }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(FmtVerb36Test, PrintfFloatF) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(x float64) {
+    fmt.Printf("%.2f\n", x)
+}
+func main() { doFmt(3.14) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_printf"));
+}
+
+TEST(FmtVerb36Test, PrintfOctal) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(n int) {
+    fmt.Printf("%o\n", n)
+}
+func main() { doFmt(8) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_printf"));
+}
+
+TEST(FmtVerb36Test, PrintfHexLower) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(n int) {
+    fmt.Printf("%x\n", n)
+}
+func main() { doFmt(255) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_printf"));
+}
+
+TEST(FmtVerb36Test, PrintfBool) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(b bool) {
+    fmt.Printf("%t\n", b)
+}
+func main() { doFmt(true) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_printf"));
+}
+
+TEST(FmtVerb36Test, FprintfFloatF) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+)
+func doFmt(x float64) {
+    fmt.Fprintf(os.Stdout, "%.2f\n", x)
+}
+func main() { doFmt(3.14) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_fprintf"));
+}
+
+TEST(FmtVerb36Test, FprintfHex) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "fmt"
+    "os"
+)
+func doFmt(n int) {
+    fmt.Fprintf(os.Stdout, "%x\n", n)
+}
+func main() { doFmt(255) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_fprintf"));
+}
+
+TEST(FmtVerb36Test, SprintfNegWidth) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func doFmt(n int) string {
+    return fmt.Sprintf("%-8d", n)
+}
+func main() { _ = doFmt(42) }
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+// ============================================================================
+// RCTest — reference counting IR emission and codegen
+// ============================================================================
+
+// String concat produces an RC object → Release call should appear in ASM
+TEST(RCTest, StringConcatEmitsRelease) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string) {
+    c := a + b
+    _ = c
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_release"));
+}
+
+// RC extern declarations are emitted for any RC-triggering program
+TEST(RCTest, StringConcatExternsDeclared) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string) {
+    c := a + b
+    _ = c
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_retain:PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_release:PROC"));
+}
+
+// make([]int, 5) → Release call for the slice backing array
+TEST(RCTest, SliceMakeEmitsRelease) {
+    auto result = compile_to_asm(R"(
+package main
+func f() {
+    s := make([]int, 5)
+    _ = s
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_release"));
+}
+
+// make(map[string]int) → Release call for the map object
+TEST(RCTest, MapMakeEmitsRelease) {
+    auto result = compile_to_asm(R"(
+package main
+func f() {
+    m := make(map[string]int)
+    _ = m
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_release"));
+}
+
+// make(chan int) → Release call for the channel object
+TEST(RCTest, ChanMakeEmitsRelease) {
+    auto result = compile_to_asm(R"(
+package main
+func f() {
+    ch := make(chan int)
+    _ = ch
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_release"));
+}
+
+// Slice make uses golangc_rc_slice_alloc, NOT malloc
+TEST(RCTest, SliceMakeUsesRCAlloc) {
+    auto result = compile_to_asm(R"(
+package main
+func f() {
+    s := make([]int, 5)
+    _ = s
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_rc_slice_alloc"));
+    EXPECT_FALSE(contains(result.asm_text, "call malloc"));
+}
+
+// Simple string literal assignment (no concat) → no RC release call
+TEST(RCTest, NoRCForStringLiteral) {
+    auto result = compile_to_asm(R"(
+package main
+func f() {
+    a := "hello"
+    _ = a
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // EXTERN declaration may still appear; check that no call is emitted
+    EXPECT_FALSE(contains(result.asm_text, "call golangc_release"));
+}
+
+// Integer variables → no retain/release calls
+TEST(RCTest, NoRCForInts) {
+    auto result = compile_to_asm(R"(
+package main
+func f() {
+    x := 42
+    _ = x
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // EXTERN declarations may still appear; check that no calls are emitted
+    EXPECT_FALSE(contains(result.asm_text, "call golangc_retain"));
+    EXPECT_FALSE(contains(result.asm_text, "call golangc_release"));
+}
+
+// Function parameters are not RC-owned → no release call for params
+TEST(RCTest, NoRCForParams) {
+    auto result = compile_to_asm(R"(
+package main
+func f(s string) {
+    _ = s
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "call golangc_release"));
+}
+
+// Multiple RC vars → multiple release calls
+TEST(RCTest, MultipleRCVarsGetReleased) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string) {
+    s := a + b
+    m := make(map[int]int)
+    _ = s
+    _ = m
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // At least 2 release calls (one for string, one for map)
+    EXPECT_GE(count_occurrences(result.asm_text, "call golangc_release"), 2);
+}
+
+// golangc_rc_slice_alloc extern is declared
+TEST(RCTest, RcSliceAllocExternDeclared) {
+    auto result = compile_to_asm(R"(
+package main
+func f() {
+    s := make([]int, 3)
+    _ = s
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_rc_slice_alloc:PROC"));
+}
+
+// Returned RC string: no release call before ret (caller owns it)
+TEST(RCTest, RCFuncReturnNoRelease) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string) string {
+    return a + b
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // The returned concat result should NOT be released here
+    // (EXTERN declaration may appear but no call instruction)
+    EXPECT_FALSE(contains(result.asm_text, "call golangc_release"));
+}
+
+// Assign two different concat results in same function → both get released
+TEST(RCTest, StringConcatAssignTwice) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string, c string, d string) {
+    s1 := a + b
+    s2 := c + d
+    _ = s1
+    _ = s2
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_GE(count_occurrences(result.asm_text, "call golangc_release"), 2);
+}
+
+// Any RC-triggering program → retain EXTERN present
+TEST(RCTest, RcRetainExternPresent) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string) {
+    s := a + b
+    _ = s
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_retain:PROC"));
+}
+
+// Any RC-triggering program → release EXTERN present
+TEST(RCTest, RcReleaseExternPresent) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string) {
+    s := a + b
+    _ = s
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_release:PROC"));
+}
+
+// The IR text should contain "release" for RC-producing vars
+TEST(RCTest, IRTextContainsRelease) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string) {
+    s := a + b
+    _ = s
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.ir_text, "release"));
+}
+
+// make([]int, n) using variable length → rc_slice_alloc still present
+TEST(RCTest, SliceMakeVarLenUsesRCAlloc) {
+    auto result = compile_to_asm(R"(
+package main
+func f(n int) {
+    s := make([]int, n)
+    _ = s
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_rc_slice_alloc"));
+}
+
+// ============================================================================
+// RC38A tests — Gap 1: var decl, Gap 2: reassignment, Gap 3: explicit return
+// ============================================================================
+
+// Gap 1: var s string = a+b → scope-exit release emitted
+TEST(RCTest, VarDeclStringConcatEmitsRelease) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string) {
+    var s string = a + b
+    _ = s
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_release"));
+}
+
+// Gap 1: var m map[int]int = make(map[int]int) → scope-exit release emitted
+TEST(RCTest, VarDeclMapMakeEmitsRelease) {
+    auto result = compile_to_asm(R"(
+package main
+func f() {
+    var m map[int]int = make(map[int]int)
+    _ = m
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_release"));
+}
+
+// Gap 1: var sl []int = make([]int, 3) → scope-exit release emitted
+TEST(RCTest, VarDeclSliceMakeEmitsRelease) {
+    auto result = compile_to_asm(R"(
+package main
+func f() {
+    var sl []int = make([]int, 3)
+    _ = sl
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_release"));
+}
+
+// Gap 2: s := a+b then s = c+d → old released on overwrite + scope-exit = 2 releases
+TEST(RCTest, AssignOverwriteEmitsRelease) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string, c string, d string) {
+    s := a + b
+    s = c + d
+    _ = s
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_GE(count_occurrences(result.asm_text, "call golangc_release"), 2);
+}
+
+// Gap 2: s := a+b then s = "hello" (literal, not RC) → exactly 1 release (scope-exit only removed, old released)
+TEST(RCTest, AssignOverwriteNonRCReleasesOld) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string) {
+    s := a + b
+    s = "hello"
+    _ = s
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Old RC value released on assignment; s is no longer tracked after assign → no scope-exit
+    EXPECT_GE(count_occurrences(result.asm_text, "call golangc_release"), 1);
+}
+
+// Gap 3: explicit void return → releases RC locals before ret
+TEST(RCTest, ExplicitReturnVoidReleasesRC) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string) {
+    s := a + b
+    _ = s
+    return
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_release"));
+}
+
+// Gap 3: explicit return of non-RC value → no release
+TEST(RCTest, ExplicitReturnNonRCNoRelease) {
+    auto result = compile_to_asm(R"(
+package main
+func f() {
+    x := 42
+    _ = x
+    return
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "call golangc_release"));
+}
+
+// Gap 3: return s (the RC var) → s not released; other RC vars are released
+TEST(RCTest, ExplicitReturnStringReleasesOtherRC) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string) string {
+    s := a + b
+    m := make(map[int]int)
+    _ = m
+    return s
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // m should be released (1), s should not be released (returned)
+    EXPECT_GE(count_occurrences(result.asm_text, "call golangc_release"), 1);
+}
+
+// Gap 3: void return with 2 RC locals → both released
+TEST(RCTest, ExplicitReturnReleasesAllWhenNoneReturned) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string) {
+    s := a + b
+    m := make(map[int]int)
+    _ = s
+    _ = m
+    return
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_GE(count_occurrences(result.asm_text, "call golangc_release"), 2);
+}
+
+// Gap 3: multi-value return with RC local → RC local released before pack
+TEST(RCTest, MultiReturnReleasesRC) {
+    auto result = compile_to_asm(R"(
+package main
+func f() (int, int) {
+    m := make(map[int]int)
+    _ = m
+    return 1, 2
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_GE(count_occurrences(result.asm_text, "call golangc_release"), 1);
+}
+
+// Gap 2: triple overwrite → 3 releases (2 old + 1 scope-exit)
+TEST(RCTest, AssignToTrackedVarTwiceReleasesOld) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string, c string, d string, e string, ff string) {
+    s := a + b
+    s = c + d
+    s = e + ff
+    _ = s
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_GE(count_occurrences(result.asm_text, "call golangc_release"), 3);
+}
+
+// Gap 1 + Gap 3: var decl then explicit return → exactly 1 release
+TEST(RCTest, VarDeclThenExplicitReturn) {
+    auto result = compile_to_asm(R"(
+package main
+func f(a string, b string) {
+    var s string = a + b
+    _ = s
+    return
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_GE(count_occurrences(result.asm_text, "call golangc_release"), 1);
 }

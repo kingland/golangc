@@ -38,6 +38,24 @@ private:
     std::unordered_map<const sema::Type*, int64_t> type_id_map_;
     int64_t next_type_id_ = 2;
 
+    // RC tracking: alloca Value* → originating opcode.
+    // Populated by gen_short_var_decl for RC-producing RHS values.
+    // Consumed by gen_func_decl to emit scope-exit Release calls.
+    std::unordered_map<Value*, Opcode> rc_vars_;
+
+    /// Returns true if the opcode produces a heap-RC-tracked object.
+    static bool is_rc_producing(Opcode op) {
+        switch (op) {
+            case Opcode::StringConcat:
+            case Opcode::SliceMake:
+            case Opcode::MapMake:
+            case Opcode::ChanMake:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     // Loop context for break/continue
     struct LoopContext {
         BasicBlock* break_target = nullptr;

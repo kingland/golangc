@@ -144,6 +144,10 @@ void X64CodeGenerator::emit_instruction(const ir::Instruction& inst,
         case ir::Opcode::SliceCap:   emit_slice_cap(inst); break;
         case ir::Opcode::SliceIndex: emit_slice_index(inst); break;
 
+        // Reference counting
+        case ir::Opcode::Retain:  emit_retain(inst);  break;
+        case ir::Opcode::Release: emit_release(inst); break;
+
         // Not yet implemented — emit comment
         default:
             emit_comment(fmt::format("TODO: {}", ir::opcode_name(inst.opcode)));
@@ -1571,11 +1575,11 @@ void X64CodeGenerator::emit_slice_make(const ir::Instruction& inst) {
         cap_slot = (it != temp_slots_.end()) ? it->second : ptr_slot + 16;
     }
 
-    // Load length into RCX, multiply by 8 to get byte count for malloc
+    // Load length into RCX, multiply by 8 to get byte count for rc_slice_alloc
     load_value_to_reg(inst.operands[0], X64Reg::RCX);
     emit("imul rcx, 8");
     emit("sub rsp, 32");
-    emit("call malloc");
+    emit("call golangc_rc_slice_alloc");
     emit("add rsp, 32");
     emit(fmt::format("mov QWORD PTR [rbp{}], rax", ptr_slot));
 
@@ -1745,6 +1749,26 @@ void X64CodeGenerator::emit_malloc(const ir::Instruction& inst) {
     emit("call malloc");
     emit(fmt::format("add rsp, {}", kShadowSpace));
     emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
+}
+
+// ============================================================================
+// Reference counting
+// ============================================================================
+
+// emit_retain: golangc_retain(ptr) — void, single pointer arg
+void X64CodeGenerator::emit_retain(const ir::Instruction& inst) {
+    load_value_to_reg(inst.operands[0], X64Reg::RCX);
+    emit(fmt::format("sub rsp, {}", kShadowSpace));
+    emit("call golangc_retain");
+    emit(fmt::format("add rsp, {}", kShadowSpace));
+}
+
+// emit_release: golangc_release(ptr) — void, single pointer arg
+void X64CodeGenerator::emit_release(const ir::Instruction& inst) {
+    load_value_to_reg(inst.operands[0], X64Reg::RCX);
+    emit(fmt::format("sub rsp, {}", kShadowSpace));
+    emit("call golangc_release");
+    emit(fmt::format("add rsp, {}", kShadowSpace));
 }
 
 // ============================================================================

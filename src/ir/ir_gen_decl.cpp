@@ -129,6 +129,7 @@ void IRGenerator::gen_func_decl(ast::FuncDecl& decl, bool is_method) {
     block_counter_ = 0;
     var_map_.clear();
     loop_stack_.clear();
+    rc_vars_.clear();
 
     auto* entry = func->create_block("entry");
     builder_.set_insert_block(entry);
@@ -238,8 +239,16 @@ void IRGenerator::gen_func_decl(ast::FuncDecl& decl, bool is_method) {
     assert(decl.body && decl.body->kind == ast::StmtKind::Block);
     gen_block(decl.body->block);
 
-    // If the current block has no terminator, add a return
+    // If the current block has no terminator, emit scope-exit releases then return
     if (builder_.insert_block() && !builder_.insert_block()->has_terminator()) {
+        // Emit Release for all RC-tracked locals that were not returned
+        for (auto& [alloca_ptr, origin_op] : rc_vars_) {
+            auto* loaded = builder_.create_load(
+                alloca_ptr, type_map_.ptr_type(), "rc.load");
+            builder_.create_release(loaded, "rc.rel");
+        }
+        rc_vars_.clear();
+
         if (func->return_type && !func->return_type->is_void()) {
             auto* zero = builder_.create_const_int(func->return_type, 0);
             builder_.create_ret(zero);

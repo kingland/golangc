@@ -596,6 +596,18 @@ Instruction* IRBuilder::create_closure_env(Value* closure_val, const std::string
 }
 
 // ============================================================================
+// Reference counting
+// ============================================================================
+
+Instruction* IRBuilder::create_retain(Value* ptr, const std::string& name) {
+    return emit_unary(Opcode::Retain, ptr, type_map_.void_type(), name);
+}
+
+Instruction* IRBuilder::create_release(Value* ptr, const std::string& name) {
+    return emit_unary(Opcode::Release, ptr, type_map_.void_type(), name);
+}
+
+// ============================================================================
 // Heap allocation
 // ============================================================================
 

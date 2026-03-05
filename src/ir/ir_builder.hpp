@@ -169,6 +169,10 @@ public:
     /// Allocate `size` bytes on the heap via malloc. Returns ptr.
     Instruction* create_malloc(Value* size, const std::string& name = "");
 
+    // ---- Reference counting ----
+    Instruction* create_retain(Value* ptr, const std::string& name = "");
+    Instruction* create_release(Value* ptr, const std::string& name = "");
+
     // ---- Extended slice operations ----
     Instruction* create_slice_index_addr(Value* slice, Value* index, const std::string& name = "");
     Instruction* create_slice_append(Value* slice, Value* elem, IRType* elem_type,

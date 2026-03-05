@@ -337,6 +337,14 @@ std::string IRPrinter::print_instruction(const Instruction& inst) {
             result += ")";
             break;
         }
+
+        case Opcode::Retain:
+            result += fmt::format("retain {}", format_value(inst.operands[0]));
+            break;
+
+        case Opcode::Release:
+            result += fmt::format("release {}", format_value(inst.operands[0]));
+            break;
     }
 
     return result;

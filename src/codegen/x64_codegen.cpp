@@ -161,6 +161,9 @@ void X64CodeGenerator::emit_module_header(const ir::Module& module) {
         "golangc_map_len",       "golangc_map_delete",
         "golangc_map_iter_make", "golangc_map_iter_next",   "golangc_map_iter_free",
         "golangc_slice_append",
+        "golangc_retain",
+        "golangc_release",
+        "golangc_rc_slice_alloc",
     };
 
     // Track which EXTERNs we've already emitted (avoid duplicates).
@@ -418,6 +421,8 @@ void X64CodeGenerator::prescan_temps(const ir::Function& func) {
                 case ir::Opcode::DeferCall:
                 case ir::Opcode::Panic:
                 case ir::Opcode::Println:
+                case ir::Opcode::Retain:
+                case ir::Opcode::Release:
                     produces_value = false;
                     break;
                 default:

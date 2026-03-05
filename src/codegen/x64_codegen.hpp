@@ -237,6 +237,10 @@ private:
     void emit_slice_index_addr(const ir::Instruction& inst);
     void emit_slice_append(const ir::Instruction& inst);
 
+    // Reference counting
+    void emit_retain(const ir::Instruction& inst);
+    void emit_release(const ir::Instruction& inst);
+
     // ---- Helpers ----
     /// Emit a line of assembly (indented with 4 spaces).
     void emit(std::string_view line);
