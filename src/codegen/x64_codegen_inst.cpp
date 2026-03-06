@@ -713,8 +713,13 @@ void X64CodeGenerator::emit_call(const ir::Instruction& inst) {
                 arg_slot = frame_.offset_of(arg->id);
             emit(fmt::format("lea {}, [rbp{}]", reg_name(kArgRegs[i + reg_offset]), arg_slot));
         } else if (arg->type && is_float_type(arg->type)) {
-            // Float args go in XMM registers at positional slot
-            load_value_to_xmm(arg, kXmmArgs[i + reg_offset]);
+            // Float args go in XMM registers at positional slot.
+            // Windows x64 variadic ABI: float must ALSO be in the integer register
+            // at the same slot so va_arg() can find it via the shadow area.
+            size_t slot_idx = i + reg_offset;
+            load_value_to_xmm(arg, kXmmArgs[slot_idx]);
+            emit(fmt::format("movq {}, xmm{}", reg_name(kArgRegs[slot_idx]),
+                             static_cast<int>(slot_idx)));
         } else {
             load_value_to_reg(arg, kArgRegs[i + reg_offset]);
         }

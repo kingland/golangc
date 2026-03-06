@@ -287,6 +287,9 @@ void golangc_builder_write_string(golangc_builder* b, const GoString* s);
 /// Append a single byte to the builder.
 void golangc_builder_write_byte(golangc_builder* b, int64_t byte_val);
 
+/// Append a Unicode rune (encoded as UTF-8) to the builder.
+void golangc_builder_write_rune(golangc_builder* b, int64_t r);
+
 /// Return the accumulated string via sret (16-byte {ptr, len} buffer).
 void golangc_builder_string(char* sret_out, golangc_builder* b);
 
@@ -492,6 +495,35 @@ int64_t golangc_unicode_is_lower(int64_t r);
 int64_t golangc_unicode_to_upper(int64_t r);
 /// unicode.ToLower: returns the lowercase mapping of r.
 int64_t golangc_unicode_to_lower(int64_t r);
+/// unicode.IsPunct: returns 1 if r is a Unicode punctuation character.
+int64_t golangc_unicode_is_punct(int64_t r);
+/// unicode.IsControl: returns 1 if r is a Unicode control character.
+int64_t golangc_unicode_is_control(int64_t r);
+/// unicode.IsMark: returns 1 if r is a Unicode combining mark.
+int64_t golangc_unicode_is_mark(int64_t r);
+/// unicode.IsNumber: returns 1 if r is a Unicode number (decimal or other).
+int64_t golangc_unicode_is_number(int64_t r);
+/// unicode.IsPrint: returns 1 if r is a printable Unicode character.
+int64_t golangc_unicode_is_print(int64_t r);
+/// unicode.IsTitle: returns 1 if r is a Unicode title-case letter.
+int64_t golangc_unicode_is_title(int64_t r);
+/// unicode.IsSymbol: returns 1 if r is a Unicode symbol character.
+int64_t golangc_unicode_is_symbol(int64_t r);
+
+// ---- math/bits package ----
+int64_t golangc_bits_len(int64_t x);
+int64_t golangc_bits_ones_count(int64_t x);
+int64_t golangc_bits_leading_zeros(int64_t x);
+int64_t golangc_bits_trailing_zeros(int64_t x);
+int64_t golangc_bits_rotate_left(int64_t x, int64_t k);
+int64_t golangc_bits_rotate_left32(int64_t x, int64_t k);
+int64_t golangc_bits_reverse64(int64_t x);
+int64_t golangc_bits_reverse32(int64_t x);
+int64_t golangc_bits_reverse16(int64_t x);
+int64_t golangc_bits_reverse8(int64_t x);
+int64_t golangc_bits_reverse_bytes64(int64_t x);
+int64_t golangc_bits_reverse_bytes32(int64_t x);
+int64_t golangc_bits_reverse_bytes16(int64_t x);
 
 // ---- bytes package ----
 struct golangc_bytes_buffer;
@@ -607,6 +639,43 @@ void golangc_release(void* ptr);
 /// Allocate a slice backing array of `byte_count` bytes with initial refcount=1.
 /// Replaces raw malloc() in slice-make codegen.
 void* golangc_rc_slice_alloc(int64_t byte_count);
+
+// ---- strings extras (38C/38D) ----
+/// strings.Cut(s, sep) -> (before, after string, found bool) via sret (40 bytes: 3 GoString fields + bool).
+/// Writes {ptr,len,ptr,len,found(i64)} = 40 bytes into sret_out.
+void golangc_strings_cut(char* sret_out, const GoString* s, const GoString* sep);
+/// strings.LastIndexByte(s, c) -> int.
+int64_t golangc_strings_last_index_byte(const GoString* s, int64_t c);
+
+// ---- strconv extras (38C/38D) ----
+/// strconv.FormatUint(i uint64, base int) string — formats unsigned integer in given base via sret.
+void golangc_format_uint(char* sret_out, uint64_t i, int64_t base);
+/// strconv.AppendInt(dst []byte, i int64, base int) []byte — appends formatted int to slice via sret.
+void golangc_append_int(char* sret_out, void* dst_hdr, int64_t i, int64_t base);
+/// strconv.Quote(s string) string — returns Go-syntax double-quoted string via sret.
+void golangc_strconv_quote(char* sret_out, const GoString* s);
+/// strconv.Unquote(s string) (string, error) — unquotes a Go-syntax quoted string via sret (32 bytes: GoString + interface).
+void golangc_strconv_unquote(char* sret_out, const GoString* s);
+
+// ---- os.ReadDir (38C) ----
+/// os.ReadDir: list directory entries. Returns slice of golangc_file_info* via sret (24-byte slice header).
+void golangc_os_read_dir(char* sret_out, const GoString* name);
+
+// ---- bufio.Writer (38D) ----
+struct golangc_bufio_writer;
+golangc_bufio_writer* golangc_bufio_writer_new(void* file_ptr);
+void   golangc_bufio_writer_write_string(golangc_bufio_writer* w, const GoString* s);
+void   golangc_bufio_writer_write_byte(golangc_bufio_writer* w, int64_t c);
+void   golangc_bufio_writer_write_rune(golangc_bufio_writer* w, int64_t r);
+void   golangc_bufio_writer_flush(golangc_bufio_writer* w);
+int64_t golangc_bufio_writer_buffered(golangc_bufio_writer* w);
+
+// ---- sync.Once (38D) ----
+struct golangc_sync_once;
+golangc_sync_once* golangc_sync_once_new(void);
+/// o.Do(f func()) — calls f exactly once.
+/// Simplified: since codegen passes function pointer as raw ptr, we invoke it if not yet done.
+void golangc_sync_once_do(golangc_sync_once* o, void* func_ptr);
 
 } // extern "C"
 

@@ -115,6 +115,10 @@ private:
     Value* gen_logical_and(ast::Expr* expr);
     Value* gen_logical_or(ast::Expr* expr);
 
+    /// Format a struct value as a Go-style "{f1 f2 ...}" string at IR gen time.
+    /// struct_alloca: pointer to the struct on the stack; sema_type: the Named/Struct sema type.
+    Value* gen_struct_to_string(Value* struct_alloca, sema::Type* sema_type);
+
     // Collect all symbols referenced in `stmt_or_expr` that are captured from
     // the enclosing scope (present in outer_map but not in inner_params).
     void collect_captures(ast::Stmt* stmt,

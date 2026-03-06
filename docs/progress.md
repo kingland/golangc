@@ -1,7 +1,7 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 38A (RC Completeness)
-## Current Milestone: RC gap-fill for var decls, reassignment, explicit return; 894 total tests passing
+## Current Phase: 38D (stdlib extras)
+## Current Milestone: strings.LastIndexByte, strings.Builder.WriteRune, strconv.Quote/Unquote, bufio.Writer, sync.Once; 953 total tests passing
 ## Completion Estimate: 99%
 
 ## Component Status
@@ -19,6 +19,53 @@
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
+
+### Session 38D - Phase 38D: strings.LastIndexByte/Builder.WriteRune, strconv.Quote/Unquote, bufio.Writer, sync.Once (2026-03-06)
+#### Completed
+- **`strings.LastIndexByte(s, c byte) int`**: runtime `golangc_strings_last_index_byte` scans from end; IR gen + checker dispatch added.
+- **`strings.Builder.WriteRune(r rune) (int, error)`**: `golangc_builder_write_rune` encodes UTF-8 into builder buffer; added to universe.cpp method list; IR gen returns `(1, nil)` tuple.
+- **`strconv.Quote(s string) string`**: `golangc_strconv_quote` escapes to double-quoted Go string literal (handles `\n\t\r\\\"` + `\xHH` for non-printable); sret GoString output.
+- **`strconv.Unquote(s string) (string, error)`**: `golangc_strconv_unquote` reverses quoting; returns 32-byte sret `(GoString, interface{})`.
+- **`bufio.Writer`**: opaque type in universe (`bufio.Writer` named type with 5 stub methods); `checker_type.cpp` maps `bufio.Writer` → `bufio_writer_ptr_type()`; IR gen dispatches WriteString/WriteByte/WriteRune/Flush/Buffered; runtime `golangc_bufio_writer_*` implements ring buffer flushing to underlying `golangc_file*`.
+- **`sync.Once`**: opaque type (`sync.Once` named type, `Do` stub method); `checker_type.cpp` maps to `sync_once_ptr_type()`; `var o sync.Once` auto-initializes via `golangc_sync_once_new()`; `o.Do(fn)` calls `golangc_sync_once_do(o, fn_ptr)` which calls fn once.
+- **Bug fixes**: `"sync.Once."` has length 10 (was compared with `>11`); `WriteRune` added to universe.cpp Builder methods.
+- **11 new `Phase38DTest` tests**: StringsLastIndexByte, StringsBuilderWriteRune, StrconvQuote, StrconvUnquote, BufioNewWriter, BufioWriterWriteStringAndFlush, BufioWriterWriteByte, SyncOnceVarDecl, SyncOnceDo, BufioWriterExternDeclared, StrconvQuoteExternDeclared.
+- **953 total tests** (942 + 11 new, 0 regressions)
+#### Next Steps
+- Phase 38E: strings.NewReplacer, strings.TrimFunc, fmt.Sscanf improvements, bufio.Writer.WriteString return values fix, os.Pipe
+
+### Session 38C - Phase 38C: strings.Cut, strconv extras, math checker fix, os.ReadDir (2026-03-06)
+#### Completed
+- **`strings.Cut(s, sep string) (before, after string, found bool)`**: full pipeline — BuiltinId::StringsCut, checker_expr returns 3-tuple type, IR gen calls `golangc_strings_cut` (40-byte sret), runtime impl searches for sep and fills {before,after,found}.
+- **`strconv.FormatUint(i uint64, base int) string`**: BuiltinId::StrconvFormatUint, runtime `golangc_format_uint` renders unsigned int in any base 2-36 via sret, IR gen passes i+base args.
+- **`strconv.AppendInt(dst []byte, i int64, base int) []byte`**: BuiltinId::StrconvAppendInt, runtime `golangc_append_int` appends formatted int to existing byte slice via sret, IR gen passes dst+i+base.
+- **Math checker fix**: `checker_expr.cpp` Sin/Cos/Tan/Asin/Acos/Atan/Atan2/Hypot/Mod/Trunc/Exp/Exp2/Inf/IsInf/IsNaN/NaN all mapped to correct new BuiltinIds (previously all incorrectly mapped to MathAbs; IR gen worked by name anyway but sema types were wrong).
+- **22 new BuiltinIds** in universe.hpp: StringsCut, StrconvFormatUint, StrconvAppendInt, MathSin/Cos/Tan/Asin/Acos/Atan/Atan2/Hypot/Mod/Trunc/Exp/Exp2/Inf/NaN/IsInf/IsNaN, OsReadDir.
+- **`os.ReadDir(name string) ([]os.DirEntry, error)`**: BuiltinId::OsReadDir, runtime `golangc_os_read_dir` uses Win32 FindFirstFile/FindNextFile to list directory entries (returns []golangc_file_info* slice), IR gen returns (slice, nil_err) 2-tuple.
+- **18 new `Phase38CTest` tests**: StringsCutCompilesAndCallsRuntime, StringsCutExternDeclared, StrconvFormatUintCompilesAndCallsRuntime, StrconvFormatUintBase10, StrconvAppendIntCompilesAndCallsRuntime, MathSin/Cos/Tan/Atan2/Mod/Trunc/ExpCompilesWithCorrectBuiltin, MathInf/IsNaN/IsInfCompilesNoError, OsReadDirCompilesAndCallsRuntime, MathSinCosNotMappedToAbs (regression), StringsCutMultipleAssign.
+- **942 total tests passing** (924 existing + 18 new, 0 regressions)
+#### Next Steps
+- Phase 38D: strings.IndexByte/LastIndexByte, strconv.Quote/Unquote, bufio.Writer, os.Pipe, sync.Once, sync.Map
+
+### Session 38B-2 - Phase 38B: math/bits + float32 codegen fix (2026-03-06)
+#### Completed
+- **float32 var decl coercion** (`ir_gen_stmt.cpp`): `gen_local_var_spec` now emits `fptrunc f64→f32` when assigning a float64 value into a float32 variable. Previously stored full f64 precision (wrong).
+- **`load_value_to_xmm` f32 fix** (`x64_codegen.cpp`): F32-typed values now load with `movss + cvtss2sd` instead of `movsd`, fixing garbage upper-32-bit reads from 4-byte stack slots written by `emit_fptrunc`.
+- **`math/bits` package**: 35 new BuiltinIds (Len/OnesCount/LeadingZeros/TrailingZeros/RotateLeft/Reverse/ReverseBytes families + UintSize constant). Runtime impls use C++20 `std::popcount`/`std::countl_zero`/`std::countr_zero`. IR gen emits width-masking (And) for narrow variants of Len/OnesCount, sentinel-OR for TrailingZerosN, shift-then-subtract for LeadingZerosN. All 5 layers updated: universe.hpp/cpp, checker_expr.cpp, ir_gen_expr.cpp, runtime.hpp/cpp.
+- **13 new `MathBitsTest` tests**: OnesCount/Len/LeadingZeros64/TrailingZeros32/RotateLeft64/RotateLeft32/Reverse64/Reverse8/ReverseBytes64/UintSize/Len8Masks/LeadingZeros8Shifts/MultipleInOneFunc
+- **932 total tests passing** (919 existing + 13 new, 0 regressions)
+#### Next Steps
+- Phase 38C: strconv extras (AppendInt, FormatUint), os.Args indexing improvements, more stdlib coverage
+
+### Session 38B - Phase 38B: unicode extras (2026-03-05)
+#### Completed
+- **7 new unicode predicates**: `IsPunct` (iswpunct), `IsControl` (iswcntrl), `IsMark` (range-based: U+0300–036F, 1DC0–1DFF, 1AB0–1AFF, FE20–FE2F), `IsNumber` (iswdigit + Nl/No codepoint ranges), `IsPrint` (iswprint), `IsTitle` (DZ/LJ/NJ digraph forms + Greek title case ranges), `IsSymbol` (currency/math/letterlike/arrows codepoint ranges)
+- **2 unicode constants**: `MaxRune` (0x10FFFF = 1114111), `ReplacementChar` (0xFFFD = 65533) — emitted as compile-time i64 constants in both `gen_selector` and `gen_builtin_call` paths
+- **4 files modified**: `runtime.hpp` (7 decls), `runtime.cpp` (7 impls), `sema/universe.hpp` (9 new BuiltinIds), `sema/checker_expr.cpp` (11 new selector cases), `ir/ir_gen_expr.cpp` (new IsX block + selector constants)
+- **11 new `UnicodeExtrasTest` tests**: IsPunct/IsControl/IsMark/IsNumber/IsPrint/IsTitle/IsSymbol callsite tests; MaxRune/ReplacementChar constant emission; MultipleUnicodeFuncs combination; ExistingFunctionsUnchanged regression
+- **905 total tests passing** (894 existing + 11 new, 0 regressions)
+#### Next Steps
+- Phase 38C: math/bits, bytes.Buffer improvements, strings extras
 
 ### Session 37A - Phase 37A: RC Completeness (2026-03-05)
 #### Completed

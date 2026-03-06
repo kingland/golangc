@@ -590,11 +590,19 @@ void X64CodeGenerator::load_value_to_xmm(const ir::Value* val, X64Reg xmm_reg) {
     if (!val) return;
     auto xmm = reg_name(xmm_reg);
 
-    // Load from stack slot via movsd
-    if (frame_.has_slot(val->id)) {
-        emit(fmt::format("movsd {}, QWORD PTR [rbp{}]", xmm, frame_.offset_of(val->id)));
-    } else if (temp_slots_.count(val->id)) {
-        emit(fmt::format("movsd {}, QWORD PTR [rbp{}]", xmm, temp_slots_[val->id]));
+    bool is_f32 = val->type && val->type->kind == ir::IRTypeKind::F32;
+    int32_t off = 0;
+    bool found = false;
+    if (frame_.has_slot(val->id)) { off = frame_.offset_of(val->id); found = true; }
+    else if (temp_slots_.count(val->id)) { off = temp_slots_[val->id]; found = true; }
+    if (!found) return;
+
+    if (is_f32) {
+        // Load 32-bit float then widen to 64-bit for XMM use
+        emit(fmt::format("movss {}, DWORD PTR [rbp{}]", xmm, off));
+        emit(fmt::format("cvtss2sd {}, {}", xmm, xmm));
+    } else {
+        emit(fmt::format("movsd {}, QWORD PTR [rbp{}]", xmm, off));
     }
 }
 

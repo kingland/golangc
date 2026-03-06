@@ -7824,3 +7824,775 @@ func main() {}
     EXPECT_FALSE(result.has_errors);
     EXPECT_GE(count_occurrences(result.asm_text, "call golangc_release"), 1);
 }
+
+// ============================================================================
+// Phase 38B Tests: unicode extras
+// ============================================================================
+
+TEST(UnicodeExtrasTest, IsPunctCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func f(r rune) bool { return unicode.IsPunct(r) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_punct"));
+}
+
+TEST(UnicodeExtrasTest, IsControlCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func f(r rune) bool { return unicode.IsControl(r) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_control"));
+}
+
+TEST(UnicodeExtrasTest, IsMarkCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func f(r rune) bool { return unicode.IsMark(r) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_mark"));
+}
+
+TEST(UnicodeExtrasTest, IsNumberCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func f(r rune) bool { return unicode.IsNumber(r) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_number"));
+}
+
+TEST(UnicodeExtrasTest, IsPrintCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func f(r rune) bool { return unicode.IsPrint(r) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_print"));
+}
+
+TEST(UnicodeExtrasTest, IsTitleCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func f(r rune) bool { return unicode.IsTitle(r) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_title"));
+}
+
+TEST(UnicodeExtrasTest, IsSymbolCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func f(r rune) bool { return unicode.IsSymbol(r) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_symbol"));
+}
+
+TEST(UnicodeExtrasTest, MaxRuneConstant) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func f() int { return unicode.MaxRune }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // 0x10FFFF = 1114111 decimal
+    EXPECT_TRUE(contains(result.asm_text, "1114111"));
+}
+
+TEST(UnicodeExtrasTest, ReplacementCharConstant) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func f() int { return unicode.ReplacementChar }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // 0xFFFD = 65533 decimal
+    EXPECT_TRUE(contains(result.asm_text, "65533"));
+}
+
+TEST(UnicodeExtrasTest, MultipleUnicodeFuncsInOneFunc) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func classify(r rune) bool {
+    return unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsPunct(r)
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_letter"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_number"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_punct"));
+}
+
+TEST(UnicodeExtrasTest, ExistingFunctionsUnchanged) {
+    auto result = compile_to_asm(R"(
+package main
+import "unicode"
+func f(r rune) int {
+    if unicode.IsUpper(r) { return unicode.ToLower(r) }
+    if unicode.IsLower(r) { return unicode.ToUpper(r) }
+    return int(r)
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_upper"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_is_lower"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_to_upper"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_unicode_to_lower"));
+}
+
+// ============================================================================
+// Phase 38B Tests: math/bits package
+// ============================================================================
+
+TEST(MathBitsTest, OnesCountCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/bits"
+func f(x int) int { return bits.OnesCount(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_ones_count"));
+}
+
+TEST(MathBitsTest, LenCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/bits"
+func f(x int) int { return bits.Len(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_len"));
+}
+
+TEST(MathBitsTest, LeadingZeros64CompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/bits"
+func f(x int) int { return bits.LeadingZeros64(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_leading_zeros"));
+}
+
+TEST(MathBitsTest, TrailingZeros32CompilesWithSentinel) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/bits"
+func f(x int) int { return bits.TrailingZeros32(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_trailing_zeros"));
+}
+
+// ============================================================
+// StructFmtTest: fmt.Println / fmt.Sprintf with struct args
+// ============================================================
+
+TEST(StructFmtTest, PrintlnStructCallsGenStructToString) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Point struct { X int; Y int }
+func main() {
+    p := Point{1, 2}
+    fmt.Println(p)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // gen_struct_to_string produces a golangc_sprintf call
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+}
+
+TEST(StructFmtTest, PrintlnStructFormatStringContainsBraces) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Point struct { X int; Y int }
+func main() {
+    p := Point{3, 4}
+    fmt.Println(p)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // The format string "{%d %d}" is emitted as DB bytes: {=123 %=37 d=100 ' '=32 }=125
+    // Pattern: 123, 37, 100, 32, 37, 100, 125
+    EXPECT_TRUE(contains(result.asm_text, "123, 37, 100, 32, 37, 100, 125"));
+}
+
+TEST(StructFmtTest, SprintfPercentVStructCallsGenStructToString) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Rect struct { W int; H int }
+func f(r Rect) string {
+    return fmt.Sprintf("%v", r)
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sprintf"));
+    // struct format "{%d %d}" is emitted as DB bytes
+    EXPECT_TRUE(contains(result.asm_text, "123, 37, 100, 32, 37, 100, 125"));
+}
+
+TEST(StructFmtTest, PrintlnTwoStructArgs) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Vec struct { X int; Y int }
+func main() {
+    a := Vec{1, 2}
+    b := Vec{3, 4}
+    fmt.Println(a, b)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(StructFmtTest, PrintlnStructWithFloatField) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Pair struct { N int; F float64 }
+func main() {
+    p := Pair{7, 3.14}
+    fmt.Println(p)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // Float field uses %g verb; "{%d %g}" as DB: {=123 %=37 d=100 ' '=32 %=37 g=103 }=125
+    EXPECT_TRUE(contains(result.asm_text, "123, 37, 100, 32, 37, 103, 125"));
+}
+
+TEST(StructFmtTest, PrintlnStructWithStringField) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+type Named struct { Name string; Age int }
+func main() {
+    n := Named{"Alice", 30}
+    fmt.Println(n)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    // "{%s %d}" as DB: {=123 %=37 s=115 ' '=32 %=37 d=100 }=125
+    EXPECT_TRUE(contains(result.asm_text, "123, 37, 115, 32, 37, 100, 125"));
+}
+
+TEST(MathBitsTest, RotateLeft64CompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/bits"
+func f(x int, k int) int { return bits.RotateLeft64(x, k) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_rotate_left"));
+}
+
+TEST(MathBitsTest, RotateLeft32CompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/bits"
+func f(x int, k int) int { return bits.RotateLeft32(x, k) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_rotate_left32"));
+}
+
+TEST(MathBitsTest, Reverse64CompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/bits"
+func f(x int) int { return bits.Reverse64(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_reverse64"));
+}
+
+TEST(MathBitsTest, Reverse8CompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/bits"
+func f(x int) int { return bits.Reverse8(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_reverse8"));
+}
+
+TEST(MathBitsTest, ReverseBytes64CompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/bits"
+func f(x int) int { return bits.ReverseBytes64(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_reverse_bytes64"));
+}
+
+TEST(MathBitsTest, UintSizeConstant) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/bits"
+func f() int { return bits.UintSize }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "64"));
+}
+
+TEST(MathBitsTest, Len8MasksTo8Bits) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/bits"
+func f(x int) int { return bits.Len8(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_len"));
+    // AND with 0xFF mask (255)
+    EXPECT_TRUE(contains(result.asm_text, "255"));
+}
+
+TEST(MathBitsTest, LeadingZeros8ShiftsSentinel) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/bits"
+func f(x int) int { return bits.LeadingZeros8(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_leading_zeros"));
+    // shift=56 applied before call, then subtracted
+    EXPECT_TRUE(contains(result.asm_text, "56"));
+}
+
+TEST(MathBitsTest, MultipleBitsFuncsInOneFunc) {
+    auto result = compile_to_asm(R"(
+package main
+import "math/bits"
+func analyze(x int) int {
+    return bits.OnesCount(x) + bits.LeadingZeros64(x) + bits.TrailingZeros64(x)
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_ones_count"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_leading_zeros"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bits_trailing_zeros"));
+}
+
+// ============================================================================
+// Phase 38C Tests: strings.Cut, strconv.FormatUint/AppendInt, math fixes, os.ReadDir
+// ============================================================================
+
+TEST(Phase38CTest, StringsCutCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func f(s string, sep string) (string, string, bool) {
+    before, after, found := strings.Cut(s, sep)
+    return before, after, found
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_cut"));
+}
+
+TEST(Phase38CTest, StringsCutExternDeclared) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func f(s string) string {
+    before, _, _ := strings.Cut(s, "/")
+    return before
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_strings_cut"));
+}
+
+TEST(Phase38CTest, StrconvFormatUintCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strconv"
+func f(x int) string { return strconv.FormatUint(x, 16) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_format_uint"));
+}
+
+TEST(Phase38CTest, StrconvFormatUintBase10) {
+    auto result = compile_to_asm(R"(
+package main
+import "strconv"
+func f(x int) string { return strconv.FormatUint(x, 10) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_format_uint"));
+}
+
+TEST(Phase38CTest, StrconvAppendIntCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strconv"
+func f(dst []byte, n int) []byte { return strconv.AppendInt(dst, n, 10) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_append_int"));
+}
+
+TEST(Phase38CTest, MathSinCompilesWithCorrectBuiltin) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func f(x float64) float64 { return math.Sin(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_sin"));
+}
+
+TEST(Phase38CTest, MathCosCompilesWithCorrectBuiltin) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func f(x float64) float64 { return math.Cos(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_cos"));
+}
+
+TEST(Phase38CTest, MathTanCompilesWithCorrectBuiltin) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func f(x float64) float64 { return math.Tan(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_tan"));
+}
+
+TEST(Phase38CTest, MathAtan2CompilesWithCorrectBuiltin) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func f(y float64, x float64) float64 { return math.Atan2(y, x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_atan2"));
+}
+
+TEST(Phase38CTest, MathModCompilesWithCorrectBuiltin) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func f(x float64, y float64) float64 { return math.Mod(x, y) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_mod"));
+}
+
+TEST(Phase38CTest, MathTruncCompilesWithCorrectBuiltin) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func f(x float64) float64 { return math.Trunc(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_trunc"));
+}
+
+TEST(Phase38CTest, MathExpCompilesWithCorrectBuiltin) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func f(x float64) float64 { return math.Exp(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_exp"));
+}
+
+TEST(Phase38CTest, MathInfCompilesNoError) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func f(sign int) float64 { return math.Inf(sign) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase38CTest, MathIsNaNCompilesNoError) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func f(x float64) bool { return math.IsNaN(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase38CTest, MathIsInfCompilesNoError) {
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func f(x float64, sign int) bool { return math.IsInf(x, sign) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+}
+
+TEST(Phase38CTest, OsReadDirCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func f(dir string) {
+    entries, _ := os.ReadDir(dir)
+    _ = entries
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_read_dir"));
+}
+
+TEST(Phase38CTest, MathSinCosNotMappedToAbs) {
+    // Regression: ensure sin/cos use their own functions, not golangc_math_abs
+    auto result = compile_to_asm(R"(
+package main
+import "math"
+func f(x float64) float64 { return math.Sin(x) + math.Cos(x) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_sin"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_math_cos"));
+    // Previously both would incorrectly emit golangc_math_abs
+}
+
+TEST(Phase38CTest, StringsCutMultipleAssign) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func f(s string) bool {
+    _, _, found := strings.Cut(s, "=")
+    return found
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_cut"));
+}
+
+// ============================================================================
+// Phase 38D Tests: strings.LastIndexByte, strings.Builder.WriteRune,
+//                  strconv.Quote/Unquote, bufio.Writer, sync.Once
+// ============================================================================
+
+TEST(Phase38DTest, StringsLastIndexByteCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func f(s string, c byte) int { return strings.LastIndexByte(s, c) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_last_index_byte"));
+}
+
+TEST(Phase38DTest, StringsBuilderWriteRuneCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func f() string {
+    var b strings.Builder
+    b.WriteRune('A')
+    return b.String()
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_builder_write_rune"));
+}
+
+TEST(Phase38DTest, StrconvQuoteCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strconv"
+func f(s string) string { return strconv.Quote(s) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strconv_quote"));
+}
+
+TEST(Phase38DTest, StrconvUnquoteCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strconv"
+func f(s string) (string, bool) {
+    t, err := strconv.Unquote(s)
+    _ = err
+    return t, true
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strconv_unquote"));
+}
+
+TEST(Phase38DTest, BufioNewWriterCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func f() {
+    w := bufio.NewWriter(os.Stdout)
+    _ = w
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bufio_writer_new"));
+}
+
+TEST(Phase38DTest, BufioWriterWriteStringAndFlushCompile) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func f(s string) {
+    w := bufio.NewWriter(os.Stdout)
+    w.WriteString(s)
+    w.Flush()
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bufio_writer_write_string"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bufio_writer_flush"));
+}
+
+TEST(Phase38DTest, BufioWriterWriteByteCompiles) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func f(c byte) {
+    w := bufio.NewWriter(os.Stdout)
+    w.WriteByte(c)
+    w.Flush()
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bufio_writer_write_byte"));
+}
+
+TEST(Phase38DTest, SyncOnceVarDeclCompiles) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func f() {
+    var o sync.Once
+    _ = o
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sync_once_new"));
+}
+
+TEST(Phase38DTest, SyncOnceDoCompiles) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func init_fn() {}
+func f() {
+    var o sync.Once
+    o.Do(init_fn)
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sync_once_do"));
+}
+
+TEST(Phase38DTest, BufioWriterExternDeclared) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "bufio"
+    "os"
+)
+func f() {
+    w := bufio.NewWriter(os.Stdout)
+    w.Flush()
+}
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_bufio_writer_new"));
+}
+
+TEST(Phase38DTest, StrconvQuoteExternDeclared) {
+    auto result = compile_to_asm(R"(
+package main
+import "strconv"
+func f(s string) string { return strconv.Quote(s) }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_strconv_quote"));
+}

@@ -42,6 +42,12 @@ Type* g_strings_reader_ptr_type = nullptr;
 // Singleton os.FileInfo pointer type (*os.FileInfo)
 Type* g_os_file_info_ptr_type = nullptr;
 
+// Singleton bufio.Writer pointer type (*bufio.Writer)
+Type* g_bufio_writer_ptr_type = nullptr;
+
+// Singleton sync.Once pointer type (*sync.Once)
+Type* g_sync_once_ptr_type = nullptr;
+
 void ensure_basic_types_initialized() {
     if (g_basic_types_initialized) return;
     g_basic_types_initialized = true;
@@ -138,6 +144,14 @@ Type* strings_reader_ptr_type() {
 
 Type* os_file_info_ptr_type() {
     return g_os_file_info_ptr_type;
+}
+
+Type* bufio_writer_ptr_type() {
+    return g_bufio_writer_ptr_type;
+}
+
+Type* sync_once_ptr_type() {
+    return g_sync_once_ptr_type;
 }
 
 Scope* init_universe(ArenaAllocator& arena) {
@@ -241,6 +255,7 @@ Scope* init_universe(ArenaAllocator& arena) {
     (void)scope->insert(make_pseudo_pkg("unicode"));
     (void)scope->insert(make_pseudo_pkg("bytes"));
     (void)scope->insert(make_pseudo_pkg("filepath"));
+    (void)scope->insert(make_pseudo_pkg("bits"));
 
     // ---- error interface type ----
     // type error interface { Error() string }
@@ -294,6 +309,7 @@ Scope* init_universe(ArenaAllocator& arena) {
 
     make_method("WriteString", void_ty);
     make_method("WriteByte",   void_ty);
+    make_method("WriteRune",   void_ty);
     make_method("String",      str_ty2);
     make_method("Reset",       void_ty);
     make_method("Len",         int_ty2);
@@ -498,6 +514,50 @@ Scope* init_universe(ArenaAllocator& arena) {
     fi_ptr_ty->pointer.base = fi_named_ty;
 
     g_os_file_info_ptr_type = fi_ptr_ty;
+
+    // ---- bufio.Writer opaque named type ----
+    auto* bwriter_underlying = arena.create<Type>();
+    bwriter_underlying->kind = TypeKind::Basic;
+    bwriter_underlying->basic = BasicKind::Uintptr;
+
+    auto* bwriter_named = arena.create<NamedType>();
+    bwriter_named->name = "bufio.Writer";
+    bwriter_named->underlying = bwriter_underlying;
+    bwriter_named->methods.push_back(NamedType::Method{"WriteString", void_ty, true});
+    bwriter_named->methods.push_back(NamedType::Method{"WriteByte",   void_ty, true});
+    bwriter_named->methods.push_back(NamedType::Method{"WriteRune",   void_ty, true});
+    bwriter_named->methods.push_back(NamedType::Method{"Flush",       void_ty, true});
+    bwriter_named->methods.push_back(NamedType::Method{"Buffered",    int_ty2, true});
+
+    auto* bwriter_named_ty = arena.create<Type>();
+    bwriter_named_ty->kind = TypeKind::Named;
+    bwriter_named_ty->named = bwriter_named;
+
+    auto* bwriter_ptr_ty = arena.create<Type>();
+    bwriter_ptr_ty->kind = TypeKind::Pointer;
+    bwriter_ptr_ty->pointer.base = bwriter_named_ty;
+
+    g_bufio_writer_ptr_type = bwriter_ptr_ty;
+
+    // ---- sync.Once opaque named type ----
+    auto* once_underlying = arena.create<Type>();
+    once_underlying->kind = TypeKind::Basic;
+    once_underlying->basic = BasicKind::Uintptr;
+
+    auto* once_named = arena.create<NamedType>();
+    once_named->name = "sync.Once";
+    once_named->underlying = once_underlying;
+    once_named->methods.push_back(NamedType::Method{"Do", void_ty, true});
+
+    auto* once_named_ty = arena.create<Type>();
+    once_named_ty->kind = TypeKind::Named;
+    once_named_ty->named = once_named;
+
+    auto* once_ptr_ty = arena.create<Type>();
+    once_ptr_ty->kind = TypeKind::Pointer;
+    once_ptr_ty->pointer.base = once_named_ty;
+
+    g_sync_once_ptr_type = once_ptr_ty;
 
     return scope;
 }

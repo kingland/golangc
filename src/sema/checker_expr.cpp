@@ -510,6 +510,26 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
             info.type = make_tuple_type({basic_type(BasicKind::Bool), error_type()});
             return info;
         }
+        if (sel == "FormatUint") {
+            info.symbol = make_member_builtin(BuiltinId::StrconvFormatUint);
+            info.type = basic_type(BasicKind::String);
+            return info;
+        }
+        if (sel == "AppendInt") {
+            info.symbol = make_member_builtin(BuiltinId::StrconvAppendInt);
+            info.type = make_slice_type(basic_type(BasicKind::Uint8));
+            return info;
+        }
+        if (sel == "Quote") {
+            info.symbol = make_member_builtin(BuiltinId::StrconvQuote);
+            info.type = basic_type(BasicKind::String);
+            return info;
+        }
+        if (sel == "Unquote") {
+            info.symbol = make_member_builtin(BuiltinId::StrconvUnquote);
+            info.type = make_tuple_type({basic_type(BasicKind::String), error_type()});
+            return info;
+        }
     }
 
     if (pkg == "os") {
@@ -592,6 +612,12 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
             info.type = basic_type(BasicKind::Bool);
             return info;
         }
+        if (sel == "ReadDir") {
+            // os.ReadDir returns ([]os.DirEntry, error) — DirEntry represented as FileInfo ptr
+            info.symbol = make_member_builtin(BuiltinId::OsReadDir);
+            info.type = make_tuple_type({make_slice_type(os_file_info_ptr_type()), error_type()});
+            return info;
+        }
     }
 
     if (pkg == "strings") {
@@ -626,6 +652,13 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
         if (sel == "ReplaceAll")   { info.symbol = make_member_builtin(BuiltinId::StringsReplaceAll);   info.type = str_type;  return info; }
         if (sel == "TrimLeft")     { info.symbol = make_member_builtin(BuiltinId::StringsTrimLeft);     info.type = str_type;  return info; }
         if (sel == "TrimRight")    { info.symbol = make_member_builtin(BuiltinId::StringsTrimRight);    info.type = str_type;  return info; }
+        if (sel == "Cut") {
+            // strings.Cut returns (before, after string, found bool) — 3-tuple
+            info.symbol = make_member_builtin(BuiltinId::StringsCut);
+            info.type = make_tuple_type({str_type, str_type, basic_type(BasicKind::Bool)});
+            return info;
+        }
+        if (sel == "LastIndexByte") { info.symbol = make_member_builtin(BuiltinId::StringsLastIndexByte); info.type = int_type; return info; }
         if (sel == "NewReader") {
             info.symbol = make_member_builtin(BuiltinId::StringsNewReader);
             info.type = strings_reader_ptr_type();
@@ -699,22 +732,22 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
         if (sel == "Log")   { info.symbol = make_member_builtin(BuiltinId::MathLog);   info.type = f64_type; return info; }
         if (sel == "Log2")  { info.symbol = make_member_builtin(BuiltinId::MathLog2);  info.type = f64_type; return info; }
         if (sel == "Log10") { info.symbol = make_member_builtin(BuiltinId::MathLog10); info.type = f64_type; return info; }
-        if (sel == "Sin")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
-        if (sel == "Cos")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
-        if (sel == "Tan")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
-        if (sel == "Inf")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
-        if (sel == "IsInf") { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = basic_type(BasicKind::Bool); return info; }
-        if (sel == "IsNaN") { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = basic_type(BasicKind::Bool); return info; }
-        if (sel == "NaN")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
-        if (sel == "Mod")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
-        if (sel == "Trunc") { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
-        if (sel == "Exp")   { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
-        if (sel == "Exp2")  { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
-        if (sel == "Hypot") { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
-        if (sel == "Atan2") { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
-        if (sel == "Atan")  { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
-        if (sel == "Asin")  { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
-        if (sel == "Acos")  { info.symbol = make_member_builtin(BuiltinId::MathAbs);   info.type = f64_type; return info; }
+        if (sel == "Sin")   { info.symbol = make_member_builtin(BuiltinId::MathSin);   info.type = f64_type; return info; }
+        if (sel == "Cos")   { info.symbol = make_member_builtin(BuiltinId::MathCos);   info.type = f64_type; return info; }
+        if (sel == "Tan")   { info.symbol = make_member_builtin(BuiltinId::MathTan);   info.type = f64_type; return info; }
+        if (sel == "Inf")   { info.symbol = make_member_builtin(BuiltinId::MathInf);   info.type = f64_type; return info; }
+        if (sel == "IsInf") { info.symbol = make_member_builtin(BuiltinId::MathIsInf); info.type = basic_type(BasicKind::Bool); return info; }
+        if (sel == "IsNaN") { info.symbol = make_member_builtin(BuiltinId::MathIsNaN); info.type = basic_type(BasicKind::Bool); return info; }
+        if (sel == "NaN")   { info.symbol = make_member_builtin(BuiltinId::MathNaN);   info.type = f64_type; return info; }
+        if (sel == "Mod")   { info.symbol = make_member_builtin(BuiltinId::MathMod);   info.type = f64_type; return info; }
+        if (sel == "Trunc") { info.symbol = make_member_builtin(BuiltinId::MathTrunc); info.type = f64_type; return info; }
+        if (sel == "Exp")   { info.symbol = make_member_builtin(BuiltinId::MathExp);   info.type = f64_type; return info; }
+        if (sel == "Exp2")  { info.symbol = make_member_builtin(BuiltinId::MathExp2);  info.type = f64_type; return info; }
+        if (sel == "Hypot") { info.symbol = make_member_builtin(BuiltinId::MathHypot); info.type = f64_type; return info; }
+        if (sel == "Atan2") { info.symbol = make_member_builtin(BuiltinId::MathAtan2); info.type = f64_type; return info; }
+        if (sel == "Atan")  { info.symbol = make_member_builtin(BuiltinId::MathAtan);  info.type = f64_type; return info; }
+        if (sel == "Asin")  { info.symbol = make_member_builtin(BuiltinId::MathAsin);  info.type = f64_type; return info; }
+        if (sel == "Acos")  { info.symbol = make_member_builtin(BuiltinId::MathAcos);  info.type = f64_type; return info; }
     }
 
     if (pkg == "sort") {
@@ -732,6 +765,11 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
         if (sel == "NewReader") {
             info.symbol = make_member_builtin(BuiltinId::BufioNewReader);
             info.type = bufio_reader_ptr_type();
+            return info;
+        }
+        if (sel == "NewWriter") {
+            info.symbol = make_member_builtin(BuiltinId::BufioNewWriter);
+            info.type = bufio_writer_ptr_type();
             return info;
         }
     }
@@ -761,8 +799,64 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
         if (sel == "IsSpace")  { info.symbol = make_member_builtin(BuiltinId::UnicodeIsSpace);  info.type = bool_ty; return info; }
         if (sel == "IsUpper")  { info.symbol = make_member_builtin(BuiltinId::UnicodeIsUpper);  info.type = bool_ty; return info; }
         if (sel == "IsLower")  { info.symbol = make_member_builtin(BuiltinId::UnicodeIsLower);  info.type = bool_ty; return info; }
-        if (sel == "ToUpper")  { info.symbol = make_member_builtin(BuiltinId::UnicodeToUpper);  info.type = int_ty;  return info; }
-        if (sel == "ToLower")  { info.symbol = make_member_builtin(BuiltinId::UnicodeToLower);  info.type = int_ty;  return info; }
+        if (sel == "ToUpper")         { info.symbol = make_member_builtin(BuiltinId::UnicodeToUpper);          info.type = int_ty;  return info; }
+        if (sel == "ToLower")         { info.symbol = make_member_builtin(BuiltinId::UnicodeToLower);          info.type = int_ty;  return info; }
+        if (sel == "IsPunct")         { info.symbol = make_member_builtin(BuiltinId::UnicodeIsPunct);          info.type = bool_ty; return info; }
+        if (sel == "IsControl")       { info.symbol = make_member_builtin(BuiltinId::UnicodeIsControl);        info.type = bool_ty; return info; }
+        if (sel == "IsMark")          { info.symbol = make_member_builtin(BuiltinId::UnicodeIsMark);           info.type = bool_ty; return info; }
+        if (sel == "IsNumber")        { info.symbol = make_member_builtin(BuiltinId::UnicodeIsNumber);         info.type = bool_ty; return info; }
+        if (sel == "IsPrint")         { info.symbol = make_member_builtin(BuiltinId::UnicodeIsPrint);          info.type = bool_ty; return info; }
+        if (sel == "IsTitle")         { info.symbol = make_member_builtin(BuiltinId::UnicodeIsTitle);          info.type = bool_ty; return info; }
+        if (sel == "IsSymbol")        { info.symbol = make_member_builtin(BuiltinId::UnicodeIsSymbol);         info.type = bool_ty; return info; }
+        if (sel == "MaxRune")         { info.symbol = make_member_builtin(BuiltinId::UnicodeMaxRune);          info.type = int_ty;  return info; }
+        if (sel == "ReplacementChar") { info.symbol = make_member_builtin(BuiltinId::UnicodeReplacementChar);  info.type = int_ty;  return info; }
+    }
+
+    if (pkg == "bits") {
+        auto* int_ty  = basic_type(BasicKind::Int);
+        // bits.UintSize constant
+        if (sel == "UintSize") { info.symbol = make_member_builtin(BuiltinId::BitsUintSize); info.type = int_ty; return info; }
+        // bits.Len family
+        if (sel == "Len")            { info.symbol = make_member_builtin(BuiltinId::BitsLen);           info.type = int_ty; return info; }
+        if (sel == "Len8")           { info.symbol = make_member_builtin(BuiltinId::BitsLen8);          info.type = int_ty; return info; }
+        if (sel == "Len16")          { info.symbol = make_member_builtin(BuiltinId::BitsLen16);         info.type = int_ty; return info; }
+        if (sel == "Len32")          { info.symbol = make_member_builtin(BuiltinId::BitsLen32);         info.type = int_ty; return info; }
+        if (sel == "Len64")          { info.symbol = make_member_builtin(BuiltinId::BitsLen64);         info.type = int_ty; return info; }
+        // bits.OnesCount family
+        if (sel == "OnesCount")      { info.symbol = make_member_builtin(BuiltinId::BitsOnesCount);     info.type = int_ty; return info; }
+        if (sel == "OnesCount8")     { info.symbol = make_member_builtin(BuiltinId::BitsOnesCount8);    info.type = int_ty; return info; }
+        if (sel == "OnesCount16")    { info.symbol = make_member_builtin(BuiltinId::BitsOnesCount16);   info.type = int_ty; return info; }
+        if (sel == "OnesCount32")    { info.symbol = make_member_builtin(BuiltinId::BitsOnesCount32);   info.type = int_ty; return info; }
+        if (sel == "OnesCount64")    { info.symbol = make_member_builtin(BuiltinId::BitsOnesCount64);   info.type = int_ty; return info; }
+        // bits.LeadingZeros family
+        if (sel == "LeadingZeros")   { info.symbol = make_member_builtin(BuiltinId::BitsLeadingZeros);  info.type = int_ty; return info; }
+        if (sel == "LeadingZeros8")  { info.symbol = make_member_builtin(BuiltinId::BitsLeadingZeros8); info.type = int_ty; return info; }
+        if (sel == "LeadingZeros16") { info.symbol = make_member_builtin(BuiltinId::BitsLeadingZeros16);info.type = int_ty; return info; }
+        if (sel == "LeadingZeros32") { info.symbol = make_member_builtin(BuiltinId::BitsLeadingZeros32);info.type = int_ty; return info; }
+        if (sel == "LeadingZeros64") { info.symbol = make_member_builtin(BuiltinId::BitsLeadingZeros64);info.type = int_ty; return info; }
+        // bits.TrailingZeros family
+        if (sel == "TrailingZeros")   { info.symbol = make_member_builtin(BuiltinId::BitsTrailingZeros);  info.type = int_ty; return info; }
+        if (sel == "TrailingZeros8")  { info.symbol = make_member_builtin(BuiltinId::BitsTrailingZeros8); info.type = int_ty; return info; }
+        if (sel == "TrailingZeros16") { info.symbol = make_member_builtin(BuiltinId::BitsTrailingZeros16);info.type = int_ty; return info; }
+        if (sel == "TrailingZeros32") { info.symbol = make_member_builtin(BuiltinId::BitsTrailingZeros32);info.type = int_ty; return info; }
+        if (sel == "TrailingZeros64") { info.symbol = make_member_builtin(BuiltinId::BitsTrailingZeros64);info.type = int_ty; return info; }
+        // bits.RotateLeft family — returns same type as input (treated as int64)
+        if (sel == "RotateLeft")   { info.symbol = make_member_builtin(BuiltinId::BitsRotateLeft);   info.type = int_ty; return info; }
+        if (sel == "RotateLeft8")  { info.symbol = make_member_builtin(BuiltinId::BitsRotateLeft8);  info.type = int_ty; return info; }
+        if (sel == "RotateLeft16") { info.symbol = make_member_builtin(BuiltinId::BitsRotateLeft16); info.type = int_ty; return info; }
+        if (sel == "RotateLeft32") { info.symbol = make_member_builtin(BuiltinId::BitsRotateLeft32); info.type = int_ty; return info; }
+        if (sel == "RotateLeft64") { info.symbol = make_member_builtin(BuiltinId::BitsRotateLeft64); info.type = int_ty; return info; }
+        // bits.Reverse family
+        if (sel == "Reverse")       { info.symbol = make_member_builtin(BuiltinId::BitsReverse);      info.type = int_ty; return info; }
+        if (sel == "Reverse8")      { info.symbol = make_member_builtin(BuiltinId::BitsReverse8);     info.type = int_ty; return info; }
+        if (sel == "Reverse16")     { info.symbol = make_member_builtin(BuiltinId::BitsReverse16);    info.type = int_ty; return info; }
+        if (sel == "Reverse32")     { info.symbol = make_member_builtin(BuiltinId::BitsReverse32);    info.type = int_ty; return info; }
+        if (sel == "Reverse64")     { info.symbol = make_member_builtin(BuiltinId::BitsReverse64);    info.type = int_ty; return info; }
+        // bits.ReverseBytes family
+        if (sel == "ReverseBytes")   { info.symbol = make_member_builtin(BuiltinId::BitsReverseBytes);   info.type = int_ty; return info; }
+        if (sel == "ReverseBytes16") { info.symbol = make_member_builtin(BuiltinId::BitsReverseBytes16); info.type = int_ty; return info; }
+        if (sel == "ReverseBytes32") { info.symbol = make_member_builtin(BuiltinId::BitsReverseBytes32); info.type = int_ty; return info; }
+        if (sel == "ReverseBytes64") { info.symbol = make_member_builtin(BuiltinId::BitsReverseBytes64); info.type = int_ty; return info; }
     }
 
     if (pkg == "bytes") {
@@ -869,6 +963,7 @@ ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
             } builder_map[] = {
                 {"WriteString", BuiltinId::StringsBuilderWriteString, 3},
                 {"WriteByte",   BuiltinId::StringsBuilderWriteByte,   0},
+                {"WriteRune",   BuiltinId::StringsBuilderWriteRune,   3},
                 {"String",      BuiltinId::StringsBuilderString,      1},
                 {"Reset",       BuiltinId::StringsBuilderReset,        0},
                 {"Len",         BuiltinId::StringsBuilderLen,          2},
@@ -1104,6 +1199,59 @@ ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
                     info.needs_addr_for_recv = false;
                     return info;
                 }
+            }
+        }
+
+        // bufio.Writer methods: expose as builtin symbols for IR dispatch.
+        if (base->kind == TypeKind::Named && base->named &&
+            base->named->name == "bufio.Writer") {
+            auto* int_ret = basic_type(BasicKind::Int);
+            // ret: 0=void/err, 1=(int,error), 2=int
+            static const struct {
+                std::string_view sel; BuiltinId id; int ret;
+            } bw_map[] = {
+                {"WriteString", BuiltinId::BufioWriterWriteString, 1},
+                {"WriteByte",   BuiltinId::BufioWriterWriteByte,   0},
+                {"WriteRune",   BuiltinId::BufioWriterWriteRune,   1},
+                {"Flush",       BuiltinId::BufioWriterFlush,       0},
+                {"Buffered",    BuiltinId::BufioWriterLen,         2},
+            };
+            for (const auto& bm : bw_map) {
+                if (sel_name == bm.sel) {
+                    auto* sym = arena_.create<Symbol>();
+                    sym->kind = SymbolKind::Builtin;
+                    sym->builtin_id = static_cast<int>(bm.id);
+                    sym->used = true;
+                    std::string full = "bufio.Writer." + std::string(sel_name);
+                    auto* stored = arena_.allocate_array<char>(full.size() + 1);
+                    std::memcpy(stored, full.data(), full.size() + 1);
+                    sym->name = std::string_view(stored, full.size());
+                    info.symbol = sym;
+                    if (bm.ret == 1) info.type = make_tuple_type({int_ret, error_type()});
+                    else if (bm.ret == 2) info.type = int_ret;
+                    else info.type = nullptr;
+                    info.needs_addr_for_recv = false;
+                    return info;
+                }
+            }
+        }
+
+        // sync.Once methods: expose as builtin symbols for IR dispatch.
+        if (base->kind == TypeKind::Named && base->named &&
+            base->named->name == "sync.Once") {
+            if (sel_name == "Do") {
+                auto* sym = arena_.create<Symbol>();
+                sym->kind = SymbolKind::Builtin;
+                sym->builtin_id = static_cast<int>(BuiltinId::SyncOnceDo);
+                sym->used = true;
+                std::string full = "sync.Once.Do";
+                auto* stored = arena_.allocate_array<char>(full.size() + 1);
+                std::memcpy(stored, full.data(), full.size() + 1);
+                sym->name = std::string_view(stored, full.size());
+                info.symbol = sym;
+                info.type = nullptr; // void
+                info.needs_addr_for_recv = false;
+                return info;
             }
         }
 

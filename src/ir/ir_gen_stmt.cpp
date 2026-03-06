@@ -1132,6 +1132,11 @@ void IRGenerator::gen_local_var_spec(ast::VarSpec& spec) {
         if (i < spec.values.count) {
             auto* val = gen_expr(spec.values[i]);
             if (val) {
+                // Float precision coercion: f64 literal → f32 var, or f32 → f64 var
+                if (var_type->kind == IRTypeKind::F32 && val->type && val->type->kind == IRTypeKind::F64)
+                    val = builder_.create_fptrunc(val, type_map_.f32_type(), "f32conv");
+                else if (var_type->kind == IRTypeKind::F64 && val->type && val->type->kind == IRTypeKind::F32)
+                    val = builder_.create_fpext(val, type_map_.f64_type(), "f64conv");
                 // If the variable is interface{} and the value is not yet boxed, box it
                 auto* sym_under = sema::underlying(sym->type);
                 if (sym_under && sym_under->kind == sema::TypeKind::Interface && val) {
@@ -1168,6 +1173,8 @@ void IRGenerator::gen_local_var_spec(ast::VarSpec& spec) {
                     else if (type_name == "sync.Mutex")      make_fn = "golangc_mutex_make";
                     else if (type_name == "sync.WaitGroup")  make_fn = "golangc_waitgroup_make";
                     else if (type_name == "bytes.Buffer")    make_fn = "golangc_bytes_new_buffer";
+                    else if (type_name == "bufio.Writer")    make_fn = "golangc_bufio_writer_new";
+                    else if (type_name == "sync.Once")       make_fn = "golangc_sync_once_new";
                     if (make_fn) {
                         auto* fn = get_or_declare_runtime(make_fn, type_map_.ptr_type());
                         auto* ptr = builder_.create_call(fn, {}, type_map_.ptr_type(),

@@ -54,6 +54,14 @@ Type* Checker::resolve_type(ast::TypeExpr* texpr) {
             if (qual.package == "strings" && qual.name == "Reader") {
                 return strings_reader_ptr_type();
             }
+            // bufio.Writer → opaque pointer type registered in universe
+            if (qual.package == "bufio" && qual.name == "Writer") {
+                return bufio_writer_ptr_type();
+            }
+            // sync.Once → opaque pointer type registered in universe
+            if (qual.package == "sync" && qual.name == "Once") {
+                return sync_once_ptr_type();
+            }
             diag_.error(qual.loc, "qualified types ({}.{}) not yet supported",
                        qual.package, qual.name);
             return nullptr;

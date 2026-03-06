@@ -1361,6 +1361,30 @@ void golangc_builder_write_byte(golangc_builder* b, int64_t byte_val) {
     b->buf[b->len++] = static_cast<char>(byte_val);
 }
 
+void golangc_builder_write_rune(golangc_builder* b, int64_t r) {
+    if (!b) return;
+    // Encode rune as UTF-8 and append to builder.
+    if (r < 0x80) {
+        builder_grow(b, 1);
+        b->buf[b->len++] = static_cast<char>(r);
+    } else if (r < 0x800) {
+        builder_grow(b, 2);
+        b->buf[b->len++] = static_cast<char>(0xC0 | (r >> 6));
+        b->buf[b->len++] = static_cast<char>(0x80 | (r & 0x3F));
+    } else if (r < 0x10000) {
+        builder_grow(b, 3);
+        b->buf[b->len++] = static_cast<char>(0xE0 | (r >> 12));
+        b->buf[b->len++] = static_cast<char>(0x80 | ((r >> 6) & 0x3F));
+        b->buf[b->len++] = static_cast<char>(0x80 | (r & 0x3F));
+    } else {
+        builder_grow(b, 4);
+        b->buf[b->len++] = static_cast<char>(0xF0 | (r >> 18));
+        b->buf[b->len++] = static_cast<char>(0x80 | ((r >> 12) & 0x3F));
+        b->buf[b->len++] = static_cast<char>(0x80 | ((r >> 6) & 0x3F));
+        b->buf[b->len++] = static_cast<char>(0x80 | (r & 0x3F));
+    }
+}
+
 void golangc_builder_string(char* sret_out, golangc_builder* b) {
     if (!b || !sret_out) return;
     // Copy buffer into a heap string (caller does not own builder's buf).
@@ -1549,6 +1573,157 @@ int64_t golangc_unicode_is_upper(int64_t r)  { return iswupper(static_cast<wint_
 int64_t golangc_unicode_is_lower(int64_t r)  { return iswlower(static_cast<wint_t>(r)) ? 1 : 0; }
 int64_t golangc_unicode_to_upper(int64_t r)  { return static_cast<int64_t>(towupper(static_cast<wint_t>(r))); }
 int64_t golangc_unicode_to_lower(int64_t r)  { return static_cast<int64_t>(towlower(static_cast<wint_t>(r))); }
+int64_t golangc_unicode_is_punct(int64_t r)  { return iswpunct(static_cast<wint_t>(r)) ? 1 : 0; }
+int64_t golangc_unicode_is_control(int64_t r){ return iswcntrl(static_cast<wint_t>(r)) ? 1 : 0; }
+// Unicode marks (Mn/Mc/Me): no standard C wide-char predicate; approximate via
+// codepoint ranges for common combining mark blocks.
+int64_t golangc_unicode_is_mark(int64_t r) {
+    // Combining Diacritical Marks: U+0300–U+036F
+    if (r >= 0x0300 && r <= 0x036F) return 1;
+    // Combining Diacritical Marks Supplement: U+1DC0–U+1DFF
+    if (r >= 0x1DC0 && r <= 0x1DFF) return 1;
+    // Combining Diacritical Marks Extended: U+1AB0–U+1AFF
+    if (r >= 0x1AB0 && r <= 0x1AFF) return 1;
+    // Combining Half Marks: U+FE20–U+FE2F
+    if (r >= 0xFE20 && r <= 0xFE2F) return 1;
+    return 0;
+}
+// unicode.IsNumber: decimal digits OR letter-numbers (e.g. Roman numerals).
+int64_t golangc_unicode_is_number(int64_t r) {
+    if (iswdigit(static_cast<wint_t>(r))) return 1;
+    // Number, Letter (Nl): U+2160–U+2188 (Roman numerals etc.)
+    if (r >= 0x2160 && r <= 0x2188) return 1;
+    // Number, Other (No): superscript/subscript digits, fractions, etc.
+    if (r >= 0x00B2 && r <= 0x00B3) return 1;  // ²³
+    if (r == 0x00B9) return 1;                   // ¹
+    if (r >= 0x00BC && r <= 0x00BE) return 1;   // ¼½¾
+    if (r >= 0x2070 && r <= 0x2079) return 1;   // superscript digits
+    if (r >= 0x2080 && r <= 0x2089) return 1;   // subscript digits
+    return 0;
+}
+int64_t golangc_unicode_is_print(int64_t r)  { return iswprint(static_cast<wint_t>(r)) ? 1 : 0; }
+// unicode.IsTitle: title-case letters (Lt category). Standard C has no predicate;
+// cover the known Unicode title-case codepoints explicitly.
+int64_t golangc_unicode_is_title(int64_t r) {
+    // DZ/LJ/NJ digraph title forms: U+01C5, U+01C8, U+01CB, U+01F2
+    if (r == 0x01C5 || r == 0x01C8 || r == 0x01CB || r == 0x01F2) return 1;
+    // Greek/Coptic title forms and ligature title cases: U+1F88–U+1FFC range (sparse)
+    if (r >= 0x1F88 && r <= 0x1FFC) {
+        // Only specific codepoints are title-case; accept the whole subrange as
+        // a conservative approximation (no false negatives for common usage).
+        return 1;
+    }
+    return 0;
+}
+// unicode.IsSymbol: math/currency/letterlike symbols (Sm/Sc/Sk/So categories).
+int64_t golangc_unicode_is_symbol(int64_t r) {
+    // Currency symbols: U+0024 '$', U+00A2–U+00A5, U+20A0–U+20CF
+    if (r == 0x0024) return 1;
+    if (r >= 0x00A2 && r <= 0x00A5) return 1;
+    if (r >= 0x20A0 && r <= 0x20CF) return 1;
+    // Mathematical operators: U+2200–U+22FF
+    if (r >= 0x2200 && r <= 0x22FF) return 1;
+    // Miscellaneous Technical: U+2300–U+23FF
+    if (r >= 0x2300 && r <= 0x23FF) return 1;
+    // Letterlike Symbols: U+2100–U+214F
+    if (r >= 0x2100 && r <= 0x214F) return 1;
+    // Arrows: U+2190–U+21FF
+    if (r >= 0x2190 && r <= 0x21FF) return 1;
+    // Modifier letters/symbols used as symbols in ASCII range
+    if (r == 0x005E || r == 0x0060 || r == 0x007C || r == 0x007E) return 1;
+    return 0;
+}
+
+// ============================================================================
+// math/bits package
+// ============================================================================
+
+#include <bit>          // std::popcount, std::countl_zero, std::countr_zero (C++20)
+#include <climits>
+
+// bits.Len(x): number of bits required to represent x (= floor(log2(x))+1, or 0 if x==0)
+// Works for all widths since we receive i64; mask to width before calling for narrower types.
+int64_t golangc_bits_len(int64_t x) {
+    if (x == 0) return 0;
+    uint64_t u = static_cast<uint64_t>(x);
+    return static_cast<int64_t>(64 - std::countl_zero(u));
+}
+int64_t golangc_bits_ones_count(int64_t x) {
+    return static_cast<int64_t>(std::popcount(static_cast<uint64_t>(x)));
+}
+int64_t golangc_bits_leading_zeros(int64_t x) {
+    if (x == 0) return 64;
+    return static_cast<int64_t>(std::countl_zero(static_cast<uint64_t>(x)));
+}
+int64_t golangc_bits_trailing_zeros(int64_t x) {
+    if (x == 0) return 64;
+    return static_cast<int64_t>(std::countr_zero(static_cast<uint64_t>(x)));
+}
+// bits.RotateLeft64(x, k): rotate left by k bits (k may be negative = rotate right)
+int64_t golangc_bits_rotate_left(int64_t x, int64_t k) {
+    uint64_t u = static_cast<uint64_t>(x);
+    int s = static_cast<int>(k & 63);
+    return static_cast<int64_t>((u << s) | (u >> (64 - s)));
+}
+// bits.RotateLeft32(x, k): rotate 32-bit value left by k bits
+int64_t golangc_bits_rotate_left32(int64_t x, int64_t k) {
+    uint32_t u = static_cast<uint32_t>(x);
+    int s = static_cast<int>(k & 31);
+    return static_cast<int64_t>((u << s) | (u >> (32 - s)));
+}
+// Reverse bit order
+int64_t golangc_bits_reverse64(int64_t x) {
+    uint64_t u = static_cast<uint64_t>(x);
+    u = ((u & 0xAAAAAAAAAAAAAAAAULL) >>  1) | ((u & 0x5555555555555555ULL) <<  1);
+    u = ((u & 0xCCCCCCCCCCCCCCCCULL) >>  2) | ((u & 0x3333333333333333ULL) <<  2);
+    u = ((u & 0xF0F0F0F0F0F0F0F0ULL) >>  4) | ((u & 0x0F0F0F0F0F0F0F0FULL) <<  4);
+    u = ((u & 0xFF00FF00FF00FF00ULL) >>  8) | ((u & 0x00FF00FF00FF00FFULL) <<  8);
+    u = ((u & 0xFFFF0000FFFF0000ULL) >> 16) | ((u & 0x0000FFFF0000FFFFULL) << 16);
+    u = ( u                          >> 32) | ( u                           << 32);
+    return static_cast<int64_t>(u);
+}
+int64_t golangc_bits_reverse32(int64_t x) {
+    uint32_t u = static_cast<uint32_t>(x);
+    u = ((u & 0xAAAAAAAAU) >>  1) | ((u & 0x55555555U) <<  1);
+    u = ((u & 0xCCCCCCCCU) >>  2) | ((u & 0x33333333U) <<  2);
+    u = ((u & 0xF0F0F0F0U) >>  4) | ((u & 0x0F0F0F0FU) <<  4);
+    u = ((u & 0xFF00FF00U) >>  8) | ((u & 0x00FF00FFU) <<  8);
+    u = ( u                >> 16) | ( u                 << 16);
+    return static_cast<int64_t>(u);
+}
+int64_t golangc_bits_reverse16(int64_t x) {
+    uint16_t u = static_cast<uint16_t>(x);
+    u = static_cast<uint16_t>(((u & 0xAAAAU) >> 1) | ((u & 0x5555U) << 1));
+    u = static_cast<uint16_t>(((u & 0xCCCCU) >> 2) | ((u & 0x3333U) << 2));
+    u = static_cast<uint16_t>(((u & 0xF0F0U) >> 4) | ((u & 0x0F0FU) << 4));
+    u = static_cast<uint16_t>(( u             >> 8) | ( u             << 8));
+    return static_cast<int64_t>(u);
+}
+int64_t golangc_bits_reverse8(int64_t x) {
+    uint8_t u = static_cast<uint8_t>(x);
+    u = static_cast<uint8_t>(((u & 0xAAU) >> 1) | ((u & 0x55U) << 1));
+    u = static_cast<uint8_t>(((u & 0xCCU) >> 2) | ((u & 0x33U) << 2));
+    u = static_cast<uint8_t>(( u           >> 4) | ( u           << 4));
+    return static_cast<int64_t>(u);
+}
+// ReverseBytes: swap byte order
+int64_t golangc_bits_reverse_bytes64(int64_t x) {
+    uint64_t u = static_cast<uint64_t>(x);
+    u = ((u & 0xFF00FF00FF00FF00ULL) >>  8) | ((u & 0x00FF00FF00FF00FFULL) <<  8);
+    u = ((u & 0xFFFF0000FFFF0000ULL) >> 16) | ((u & 0x0000FFFF0000FFFFULL) << 16);
+    u = ( u                          >> 32) | ( u                           << 32);
+    return static_cast<int64_t>(u);
+}
+int64_t golangc_bits_reverse_bytes32(int64_t x) {
+    uint32_t u = static_cast<uint32_t>(x);
+    u = ((u & 0xFF00FF00U) >>  8) | ((u & 0x00FF00FFU) <<  8);
+    u = ( u                >> 16) | ( u                 << 16);
+    return static_cast<int64_t>(u);
+}
+int64_t golangc_bits_reverse_bytes16(int64_t x) {
+    uint16_t u = static_cast<uint16_t>(x);
+    return static_cast<int64_t>(static_cast<uint16_t>((u >> 8) | (u << 8)));
+}
 
 // ============================================================================
 // bytes package
@@ -1622,6 +1797,386 @@ void golangc_bytes_reset(golangc_bytes_buffer* b) {
 
 int64_t golangc_bytes_len(golangc_bytes_buffer* b) {
     return b->len;
+}
+
+// ============================================================================
+// strings extras (Phase 38C/38D)
+// ============================================================================
+
+int64_t golangc_strings_last_index_byte(const GoString* s, int64_t c) {
+    if (!s || s->len == 0) return -1;
+    for (int64_t i = s->len - 1; i >= 0; --i) {
+        if (static_cast<unsigned char>(s->ptr[i]) == static_cast<unsigned char>(c))
+            return i;
+    }
+    return -1;
+}
+
+void golangc_strings_cut(char* sret_out, const GoString* s, const GoString* sep) {
+    // Returns (before GoString, after GoString, found int64) = 40 bytes
+    // Layout: [ptr(8) len(8)] [ptr(8) len(8)] [found(8)] = 40 bytes
+    struct Result {
+        const char* before_ptr;
+        int64_t     before_len;
+        const char* after_ptr;
+        int64_t     after_len;
+        int64_t     found;
+    };
+    auto* r = reinterpret_cast<Result*>(sret_out);
+    if (!s || sep->len == 0) {
+        r->before_ptr = s ? s->ptr : nullptr;
+        r->before_len = s ? s->len : 0;
+        r->after_ptr  = nullptr;
+        r->after_len  = 0;
+        r->found      = sep && sep->len == 0 ? 1 : 0;
+        return;
+    }
+    // Search for sep in s
+    int64_t found_at = -1;
+    for (int64_t i = 0; i <= s->len - sep->len; ++i) {
+        if (memcmp(s->ptr + i, sep->ptr, static_cast<size_t>(sep->len)) == 0) {
+            found_at = i;
+            break;
+        }
+    }
+    if (found_at < 0) {
+        r->before_ptr = s->ptr;
+        r->before_len = s->len;
+        r->after_ptr  = nullptr;
+        r->after_len  = 0;
+        r->found      = 0;
+    } else {
+        r->before_ptr = s->ptr;
+        r->before_len = found_at;
+        r->after_ptr  = s->ptr + found_at + sep->len;
+        r->after_len  = s->len - found_at - sep->len;
+        r->found      = 1;
+    }
+}
+
+// ============================================================================
+// strconv extras (Phase 38C)
+// ============================================================================
+
+void golangc_format_uint(char* sret_out, uint64_t i, int64_t base) {
+    // Renders unsigned integer in given base (2-36). Returns via sret (GoString).
+    if (base < 2 || base > 36) base = 10;
+    static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    char buf[70];
+    int pos = 69;
+    buf[pos] = '\0';
+    if (i == 0) {
+        buf[--pos] = '0';
+    } else {
+        while (i > 0) {
+            buf[--pos] = digits[i % static_cast<uint64_t>(base)];
+            i /= static_cast<uint64_t>(base);
+        }
+    }
+    int64_t len = static_cast<int64_t>(69 - pos);
+    char* heap = static_cast<char*>(rc_alloc_string(static_cast<size_t>(len + 1)));
+    memcpy(heap, buf + pos, static_cast<size_t>(len));
+    heap[len] = '\0';
+    GoString* out = reinterpret_cast<GoString*>(sret_out);
+    out->ptr = heap;
+    out->len = len;
+}
+
+void golangc_append_int(char* sret_out, void* dst_hdr, int64_t i, int64_t base) {
+    // Appends decimal (base ignored for now) representation of i to dst []byte, returns new slice.
+    // dst_hdr: pointer to {ptr,len,cap} slice header.
+    // sret_out: 24-byte output slice header.
+    char tmp[30];
+    int n = snprintf(tmp, sizeof(tmp), "%lld", static_cast<long long>(i));
+    if (n < 0) n = 0;
+    (void)base; // simplified: always base 10
+
+    // Read dst slice
+    void** dst_ptr_p = static_cast<void**>(dst_hdr);
+    int64_t* dst_len_p = reinterpret_cast<int64_t*>(static_cast<char*>(dst_hdr) + 8);
+    int64_t* dst_cap_p = reinterpret_cast<int64_t*>(static_cast<char*>(dst_hdr) + 16);
+
+    int64_t old_len = dst_len_p ? *dst_len_p : 0;
+    int64_t old_cap = dst_cap_p ? *dst_cap_p : 0;
+    void*   old_ptr = dst_ptr_p ? *dst_ptr_p : nullptr;
+    int64_t new_len = old_len + n;
+
+    void* new_ptr = old_ptr;
+    int64_t new_cap = old_cap;
+    if (new_len > old_cap) {
+        new_cap = new_len * 2;
+        new_ptr = rc_alloc_string(static_cast<size_t>(new_cap));
+        if (old_ptr && old_len > 0)
+            memcpy(new_ptr, old_ptr, static_cast<size_t>(old_len));
+    }
+    memcpy(static_cast<char*>(new_ptr) + old_len, tmp, static_cast<size_t>(n));
+
+    void** out_ptr_p = static_cast<void**>(reinterpret_cast<void*>(sret_out));
+    int64_t* out_len_p = reinterpret_cast<int64_t*>(sret_out + 8);
+    int64_t* out_cap_p = reinterpret_cast<int64_t*>(sret_out + 16);
+    *out_ptr_p = new_ptr;
+    *out_len_p = new_len;
+    *out_cap_p = new_cap;
+}
+
+// ============================================================================
+// os.ReadDir (Phase 38C)
+// ============================================================================
+
+// ============================================================================
+// strconv extras (Phase 38D)
+// ============================================================================
+
+void golangc_strconv_quote(char* sret_out, const GoString* s) {
+    // Returns Go-syntax double-quoted string via sret.
+    // Escapes: \n \t \r \\ \" and non-printable chars as \xHH.
+    if (!s) {
+        GoString* out = reinterpret_cast<GoString*>(sret_out);
+        out->ptr = "\"\"";
+        out->len = 2;
+        return;
+    }
+    // Estimate size: 2 quotes + len * 4 (worst case all \\xHH)
+    size_t cap = static_cast<size_t>(s->len) * 4 + 3;
+    char* buf = static_cast<char*>(rc_alloc_string(cap));
+    size_t pos = 0;
+    buf[pos++] = '"';
+    for (int64_t i = 0; i < s->len; ++i) {
+        unsigned char ch = static_cast<unsigned char>(s->ptr[i]);
+        switch (ch) {
+            case '"':  buf[pos++] = '\\'; buf[pos++] = '"';  break;
+            case '\\': buf[pos++] = '\\'; buf[pos++] = '\\'; break;
+            case '\n': buf[pos++] = '\\'; buf[pos++] = 'n';  break;
+            case '\t': buf[pos++] = '\\'; buf[pos++] = 't';  break;
+            case '\r': buf[pos++] = '\\'; buf[pos++] = 'r';  break;
+            default:
+                if (ch < 0x20 || ch == 0x7f) {
+                    buf[pos++] = '\\';
+                    buf[pos++] = 'x';
+                    buf[pos++] = "0123456789abcdef"[ch >> 4];
+                    buf[pos++] = "0123456789abcdef"[ch & 0xf];
+                } else {
+                    buf[pos++] = static_cast<char>(ch);
+                }
+                break;
+        }
+    }
+    buf[pos++] = '"';
+    buf[pos] = '\0';
+    GoString* out = reinterpret_cast<GoString*>(sret_out);
+    out->ptr = buf;
+    out->len = static_cast<int64_t>(pos);
+}
+
+void golangc_strconv_unquote(char* sret_out, const GoString* s) {
+    // Unquotes a Go-syntax double-quoted string. Returns (string, error) = 32 bytes sret.
+    // Layout: [GoString(16)] [interface{type_tag,data_ptr}(16)] = 32 bytes.
+    struct Result { const char* ptr; int64_t len; int64_t type_tag; void* data_ptr; };
+    auto* r = reinterpret_cast<Result*>(sret_out);
+    r->type_tag = 0;  // nil error
+    r->data_ptr = nullptr;
+
+    if (!s || s->len < 2 || s->ptr[0] != '"' || s->ptr[s->len-1] != '"') {
+        // Invalid: return empty string + non-nil error (simplified: nil error)
+        r->ptr = nullptr; r->len = 0;
+        return;
+    }
+    // Strip quotes, process escapes
+    size_t cap = static_cast<size_t>(s->len);
+    char* buf = static_cast<char*>(rc_alloc_string(cap));
+    size_t pos = 0;
+    for (int64_t i = 1; i < s->len - 1; ++i) {
+        unsigned char ch = static_cast<unsigned char>(s->ptr[i]);
+        if (ch == '\\' && i + 1 < s->len - 1) {
+            ++i;
+            unsigned char next = static_cast<unsigned char>(s->ptr[i]);
+            switch (next) {
+                case 'n':  buf[pos++] = '\n'; break;
+                case 't':  buf[pos++] = '\t'; break;
+                case 'r':  buf[pos++] = '\r'; break;
+                case '\\': buf[pos++] = '\\'; break;
+                case '"':  buf[pos++] = '"';  break;
+                case 'x':
+                    if (i + 2 < s->len - 1) {
+                        auto hex = [](char c) -> int {
+                            if (c >= '0' && c <= '9') return c - '0';
+                            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                            return 0;
+                        };
+                        buf[pos++] = static_cast<char>((hex(s->ptr[i+1]) << 4) | hex(s->ptr[i+2]));
+                        i += 2;
+                    }
+                    break;
+                default: buf[pos++] = static_cast<char>(next); break;
+            }
+        } else {
+            buf[pos++] = static_cast<char>(ch);
+        }
+    }
+    buf[pos] = '\0';
+    r->ptr = buf;
+    r->len = static_cast<int64_t>(pos);
+}
+
+// ============================================================================
+// bufio.Writer (Phase 38D)
+// ============================================================================
+
+struct golangc_bufio_writer {
+    golangc_file* file;   // underlying file (may be null)
+    char*   buf;
+    int64_t len;
+    int64_t cap;
+};
+
+golangc_bufio_writer* golangc_bufio_writer_new(void* file_ptr) {
+    golangc_bufio_writer* w = static_cast<golangc_bufio_writer*>(malloc(sizeof(golangc_bufio_writer)));
+    if (!w) return nullptr;
+    w->file = static_cast<golangc_file*>(file_ptr);
+    w->cap  = 4096;
+    w->len  = 0;
+    w->buf  = static_cast<char*>(malloc(static_cast<size_t>(w->cap)));
+    return w;
+}
+
+static void bufio_writer_flush_internal(golangc_bufio_writer* w) {
+    if (w->len <= 0) return;
+    if (w->file && w->file->f) {
+        fwrite(w->buf, 1, static_cast<size_t>(w->len), w->file->f);
+    }
+    w->len = 0;
+}
+
+static void bufio_writer_ensure(golangc_bufio_writer* w, int64_t needed) {
+    if (w->len + needed <= w->cap) return;
+    bufio_writer_flush_internal(w);
+    if (needed > w->cap) {
+        free(w->buf);
+        w->cap = needed * 2;
+        w->buf = static_cast<char*>(malloc(static_cast<size_t>(w->cap)));
+    }
+}
+
+void golangc_bufio_writer_write_string(golangc_bufio_writer* w, const GoString* s) {
+    if (!w || !s || s->len == 0) return;
+    bufio_writer_ensure(w, s->len);
+    memcpy(w->buf + w->len, s->ptr, static_cast<size_t>(s->len));
+    w->len += s->len;
+}
+
+void golangc_bufio_writer_write_byte(golangc_bufio_writer* w, int64_t c) {
+    if (!w) return;
+    bufio_writer_ensure(w, 1);
+    w->buf[w->len++] = static_cast<char>(c);
+}
+
+void golangc_bufio_writer_write_rune(golangc_bufio_writer* w, int64_t r) {
+    if (!w) return;
+    // Encode UTF-8
+    if (r < 0x80) {
+        golangc_bufio_writer_write_byte(w, r);
+    } else if (r < 0x800) {
+        golangc_bufio_writer_write_byte(w, 0xC0 | (r >> 6));
+        golangc_bufio_writer_write_byte(w, 0x80 | (r & 0x3F));
+    } else if (r < 0x10000) {
+        golangc_bufio_writer_write_byte(w, 0xE0 | (r >> 12));
+        golangc_bufio_writer_write_byte(w, 0x80 | ((r >> 6) & 0x3F));
+        golangc_bufio_writer_write_byte(w, 0x80 | (r & 0x3F));
+    } else {
+        golangc_bufio_writer_write_byte(w, 0xF0 | (r >> 18));
+        golangc_bufio_writer_write_byte(w, 0x80 | ((r >> 12) & 0x3F));
+        golangc_bufio_writer_write_byte(w, 0x80 | ((r >> 6) & 0x3F));
+        golangc_bufio_writer_write_byte(w, 0x80 | (r & 0x3F));
+    }
+}
+
+void golangc_bufio_writer_flush(golangc_bufio_writer* w) {
+    if (!w) return;
+    bufio_writer_flush_internal(w);
+}
+
+int64_t golangc_bufio_writer_buffered(golangc_bufio_writer* w) {
+    return w ? w->len : 0;
+}
+
+// ============================================================================
+// sync.Once (Phase 38D)
+// ============================================================================
+
+struct golangc_sync_once {
+    int64_t done;  // 0 = not done, 1 = done
+};
+
+golangc_sync_once* golangc_sync_once_new(void) {
+    golangc_sync_once* o = static_cast<golangc_sync_once*>(malloc(sizeof(golangc_sync_once)));
+    if (o) o->done = 0;
+    return o;
+}
+
+void golangc_sync_once_do(golangc_sync_once* o, void* func_ptr) {
+    if (!o || o->done) return;
+    o->done = 1;
+    if (func_ptr) {
+        auto fn = reinterpret_cast<void(*)()>(func_ptr);
+        fn();
+    }
+}
+
+void golangc_os_read_dir(char* sret_out, const GoString* name) {
+    // Returns []golangc_file_info* via sret (24-byte slice header).
+    // Simplified: uses Win32 FindFirstFile/FindNextFile.
+    // On error or empty dir: returns empty slice.
+    struct GoSliceHdr { void* ptr; int64_t len; int64_t cap; };
+    GoSliceHdr* out = reinterpret_cast<GoSliceHdr*>(sret_out);
+    out->ptr = nullptr;
+    out->len = 0;
+    out->cap = 0;
+
+#ifdef _WIN32
+    if (!name || name->len == 0) return;
+    // Build null-terminated path with wildcard
+    char pattern[520];
+    int64_t plen = name->len < 512 ? name->len : 512;
+    memcpy(pattern, name->ptr, static_cast<size_t>(plen));
+    // Append \* for wildcard
+    if (plen > 0 && pattern[plen-1] != '\\' && pattern[plen-1] != '/')
+        pattern[plen++] = '\\';
+    pattern[plen++] = '*';
+    pattern[plen] = '\0';
+
+    WIN32_FIND_DATAA fdata;
+    HANDLE hFind = FindFirstFileA(pattern, &fdata);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+
+    // Count entries first (excluding . and ..)
+    std::vector<golangc_file_info*> entries;
+    do {
+        if (strcmp(fdata.cFileName, ".") == 0 || strcmp(fdata.cFileName, "..") == 0)
+            continue;
+        golangc_file_info* fi = static_cast<golangc_file_info*>(malloc(sizeof(golangc_file_info)));
+        if (!fi) continue;
+        strncpy_s(fi->name, sizeof(fi->name), fdata.cFileName, _TRUNCATE);
+        ULARGE_INTEGER sz;
+        sz.LowPart  = fdata.nFileSizeLow;
+        sz.HighPart = fdata.nFileSizeHigh;
+        fi->size   = static_cast<int64_t>(sz.QuadPart);
+        fi->is_dir = (fdata.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
+        fi->err_code = 0;
+        entries.push_back(fi);
+    } while (FindNextFileA(hFind, &fdata));
+    FindClose(hFind);
+
+    if (entries.empty()) return;
+    int64_t count = static_cast<int64_t>(entries.size());
+    golangc_file_info** arr = static_cast<golangc_file_info**>(
+        malloc(static_cast<size_t>(count) * sizeof(golangc_file_info*)));
+    if (!arr) return;
+    for (int64_t i = 0; i < count; ++i) arr[i] = entries[static_cast<size_t>(i)];
+    out->ptr = arr;
+    out->len = count;
+    out->cap = count;
+#endif
 }
 
 } // extern "C"

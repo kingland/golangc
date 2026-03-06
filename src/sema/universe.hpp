@@ -159,6 +159,90 @@ enum class BuiltinId : int {
     UnicodeIsLower,      // unicode.IsLower(r rune) bool
     UnicodeToUpper,      // unicode.ToUpper(r rune) rune
     UnicodeToLower,      // unicode.ToLower(r rune) rune
+    UnicodeIsPunct,      // unicode.IsPunct(r rune) bool
+    UnicodeIsControl,    // unicode.IsControl(r rune) bool
+    UnicodeIsMark,       // unicode.IsMark(r rune) bool
+    UnicodeIsNumber,     // unicode.IsNumber(r rune) bool
+    UnicodeIsPrint,      // unicode.IsPrint(r rune) bool
+    UnicodeIsTitle,      // unicode.IsTitle(r rune) bool
+    UnicodeIsSymbol,     // unicode.IsSymbol(r rune) bool
+    UnicodeMaxRune,      // unicode.MaxRune constant (int32 = 0x10FFFF)
+    UnicodeReplacementChar, // unicode.ReplacementChar constant (int32 = 0xFFFD)
+    // math/bits pseudo-package
+    BitsLen,              // bits.Len(x uint) int
+    BitsLen8,             // bits.Len8(x uint8) int
+    BitsLen16,            // bits.Len16(x uint16) int
+    BitsLen32,            // bits.Len32(x uint32) int
+    BitsLen64,            // bits.Len64(x uint64) int
+    BitsOnesCount,        // bits.OnesCount(x uint) int
+    BitsOnesCount8,       // bits.OnesCount8(x uint8) int
+    BitsOnesCount16,      // bits.OnesCount16(x uint16) int
+    BitsOnesCount32,      // bits.OnesCount32(x uint32) int
+    BitsOnesCount64,      // bits.OnesCount64(x uint64) int
+    BitsLeadingZeros,     // bits.LeadingZeros(x uint) int
+    BitsLeadingZeros8,    // bits.LeadingZeros8(x uint8) int
+    BitsLeadingZeros16,   // bits.LeadingZeros16(x uint16) int
+    BitsLeadingZeros32,   // bits.LeadingZeros32(x uint32) int
+    BitsLeadingZeros64,   // bits.LeadingZeros64(x uint64) int
+    BitsTrailingZeros,    // bits.TrailingZeros(x uint) int
+    BitsTrailingZeros8,   // bits.TrailingZeros8(x uint8) int
+    BitsTrailingZeros16,  // bits.TrailingZeros16(x uint16) int
+    BitsTrailingZeros32,  // bits.TrailingZeros32(x uint32) int
+    BitsTrailingZeros64,  // bits.TrailingZeros64(x uint64) int
+    BitsRotateLeft,       // bits.RotateLeft(x uint, k int) uint
+    BitsRotateLeft8,      // bits.RotateLeft8(x uint8, k int) uint8
+    BitsRotateLeft16,     // bits.RotateLeft16(x uint16, k int) uint16
+    BitsRotateLeft32,     // bits.RotateLeft32(x uint32, k int) uint32
+    BitsRotateLeft64,     // bits.RotateLeft64(x uint64, k int) uint64
+    BitsReverse,          // bits.Reverse(x uint) uint
+    BitsReverse8,         // bits.Reverse8(x uint8) uint8
+    BitsReverse16,        // bits.Reverse16(x uint16) uint16
+    BitsReverse32,        // bits.Reverse32(x uint32) uint32
+    BitsReverse64,        // bits.Reverse64(x uint64) uint64
+    BitsReverseBytes,     // bits.ReverseBytes(x uint) uint
+    BitsReverseBytes16,   // bits.ReverseBytes16(x uint16) uint16
+    BitsReverseBytes32,   // bits.ReverseBytes32(x uint32) uint32
+    BitsReverseBytes64,   // bits.ReverseBytes64(x uint64) uint64
+    BitsUintSize,         // bits.UintSize constant = 64
+    // strings extras (38C)
+    StringsCut,           // strings.Cut(s, sep string) (before, after string, found bool)
+    // strconv extras (38C)
+    StrconvFormatUint,    // strconv.FormatUint(i uint64, base int) string
+    StrconvAppendInt,     // strconv.AppendInt(dst []byte, i int64, base int) []byte
+    // math extras (38C) — proper BuiltinIds for sin/cos/etc.
+    MathSin,    // math.Sin(x float64) float64
+    MathCos,    // math.Cos(x float64) float64
+    MathTan,    // math.Tan(x float64) float64
+    MathAsin,   // math.Asin(x float64) float64
+    MathAcos,   // math.Acos(x float64) float64
+    MathAtan,   // math.Atan(x float64) float64
+    MathAtan2,  // math.Atan2(y, x float64) float64
+    MathHypot,  // math.Hypot(p, q float64) float64
+    MathMod,    // math.Mod(x, y float64) float64
+    MathTrunc,  // math.Trunc(x float64) float64
+    MathExp,    // math.Exp(x float64) float64
+    MathExp2,   // math.Exp2(x float64) float64
+    MathInf,    // math.Inf(sign int) float64
+    MathNaN,    // math.NaN() float64
+    MathIsInf,  // math.IsInf(f float64, sign int) bool
+    MathIsNaN,  // math.IsNaN(f float64) bool
+    // os extras (38C)
+    OsReadDir,  // os.ReadDir(name string) ([]os.DirEntry, error)
+    // strings extras (38D)
+    StringsLastIndexByte,    // strings.LastIndexByte(s string, c byte) int
+    StringsBuilderWriteRune, // b.WriteRune(r rune) (int, error)
+    // strconv extras (38D)
+    StrconvQuote,    // strconv.Quote(s string) string
+    StrconvUnquote,  // strconv.Unquote(s string) (string, error)
+    // bufio.Writer (38D)
+    BufioNewWriter,          // bufio.NewWriter(w io.Writer) *bufio.Writer
+    BufioWriterWriteString,  // bw.WriteString(s string) (int, error)
+    BufioWriterWriteByte,    // bw.WriteByte(c byte) error
+    BufioWriterWriteRune,    // bw.WriteRune(r rune) (int, error)
+    BufioWriterFlush,        // bw.Flush() error
+    BufioWriterLen,          // bw.Buffered() int  (renamed to Len for simplicity)
+    // sync.Once (38D)
+    SyncOnceDo,  // o.Do(f func())
     // bytes.Buffer methods (called on *bytes.Buffer receiver)
     BytesBufferWriteString, // b.WriteString(s string) (int, error)
     BytesBufferWriteByte,   // b.WriteByte(c byte) error
@@ -247,6 +331,14 @@ enum class BuiltinId : int {
 /// Get the os.FileInfo opaque pointer type (*os.FileInfo).
 /// Returns nullptr until init_universe() has been called.
 [[nodiscard]] Type* os_file_info_ptr_type();
+
+/// Get the bufio.Writer opaque pointer type (*bufio.Writer).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* bufio_writer_ptr_type();
+
+/// Get the sync.Once opaque pointer type (*sync.Once).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* sync_once_ptr_type();
 
 } // namespace sema
 } // namespace golangc
