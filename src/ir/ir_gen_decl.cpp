@@ -130,6 +130,7 @@ void IRGenerator::gen_func_decl(ast::FuncDecl& decl, bool is_method) {
     var_map_.clear();
     loop_stack_.clear();
     rc_vars_.clear();
+    raii_vars_.clear();
 
     auto* entry = func->create_block("entry");
     builder_.set_insert_block(entry);
@@ -241,6 +242,15 @@ void IRGenerator::gen_func_decl(ast::FuncDecl& decl, bool is_method) {
 
     // If the current block has no terminator, emit scope-exit releases then return
     if (builder_.insert_block() && !builder_.insert_block()->has_terminator()) {
+        // Emit RAII cleanup calls for opaque handles
+        for (auto& [alloca_ptr, cleanup_fn] : raii_vars_) {
+            auto* loaded = builder_.create_load(
+                alloca_ptr, type_map_.ptr_type(), "raii.load");
+            auto* fn = get_or_declare_runtime(cleanup_fn, type_map_.void_type());
+            builder_.create_call(fn, {loaded}, type_map_.void_type(), "raii.cleanup");
+        }
+        raii_vars_.clear();
+
         // Emit Release for all RC-tracked locals that were not returned
         for (auto& [alloca_ptr, origin_op] : rc_vars_) {
             auto* loaded = builder_.create_load(

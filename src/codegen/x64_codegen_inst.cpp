@@ -413,10 +413,23 @@ void X64CodeGenerator::emit_arith(const ir::Instruction& inst) {
     emit("mov rcx, rax");
     emit("mov rax, r10");
 
+    auto ovf_label = fmt::format("{}$ovf", masm_name(current_func_->name));
     switch (inst.opcode) {
-        case ir::Opcode::Add: emit("add rax, rcx"); break;
-        case ir::Opcode::Sub: emit("sub rax, rcx"); break;
-        case ir::Opcode::Mul: emit("imul rax, rcx"); break;
+        case ir::Opcode::Add:
+            emit("add rax, rcx");
+            emit(fmt::format("jo {}", ovf_label));
+            ovf_needed_ = true;
+            break;
+        case ir::Opcode::Sub:
+            emit("sub rax, rcx");
+            emit(fmt::format("jo {}", ovf_label));
+            ovf_needed_ = true;
+            break;
+        case ir::Opcode::Mul:
+            emit("imul rax, rcx");
+            emit(fmt::format("jo {}", ovf_label));
+            ovf_needed_ = true;
+            break;
         default: break;
     }
 
@@ -431,6 +444,10 @@ void X64CodeGenerator::emit_div_rem(const ir::Instruction& inst) {
     load_value_to_rax(inst.operands[1]);
     emit("mov rcx, rax");
     emit("mov rax, r10");
+    // Explicit div-by-zero check (before cqo/idiv)
+    emit("test rcx, rcx");
+    emit(fmt::format("jz {}$dvz", masm_name(current_func_->name)));
+    dvz_needed_ = true;
     emit("cqo");       // Sign-extend RAX into RDX:RAX
     emit("idiv rcx");  // RAX = quotient, RDX = remainder
 
@@ -445,6 +462,8 @@ void X64CodeGenerator::emit_neg(const ir::Instruction& inst) {
     auto slot = get_temp_slot(inst.id);
     load_value_to_rax(inst.operands[0]);
     emit("neg rax");
+    emit(fmt::format("jo {}$ovf", masm_name(current_func_->name)));
+    ovf_needed_ = true;
     emit(fmt::format("mov QWORD PTR [rbp{}], rax", slot));
 }
 

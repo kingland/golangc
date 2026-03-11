@@ -1,7 +1,7 @@
 # Golang Compiler Progress Tracker
 
-## Current Phase: 38D (stdlib extras)
-## Current Milestone: strings.LastIndexByte, strings.Builder.WriteRune, strconv.Quote/Unquote, bufio.Writer, sync.Once; 953 total tests passing
+## Current Phase: 38I (integer overflow detection)
+## Current Milestone: Runtime overflow/div-by-zero detection via inline jo/jz checks + panic trampolines; 1026 total tests passing
 ## Completion Estimate: 99%
 
 ## Component Status
@@ -12,13 +12,114 @@
 | Lexer | ✅ Complete | 89 | All Go tokens, literals, operators, comments, auto-semicolons |
 | AST | ✅ Complete | - | Full node hierarchy (16 expr, 21 stmt, 7 decl, 13 type kinds) |
 | Parser | ✅ Complete | 87 | Recursive descent, all Go syntax, 7 sample programs parse; []T{} composite lit as call arg fixed (Phase 33) |
-| Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction; os.FileInfo opaque type added |
-| IR | ✅ Complete | 101 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq, make_array_type public; Phase 34: Mem2Reg+ConstFold+ConstProp+DCE passes, PassManager, type ownership fix |
-| CodeGen | ✅ Complete | 423 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, buffered+unbuffered channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os/strings/math/errors/sync/bufio/sort/time/rand pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings.Builder, errors.New, fmt.Errorf, sync.Mutex, sync.WaitGroup, os.Stdout/Stderr/Stdin, fmt.Fprintf/Fprintln/Scan/Scanln/Scanf/Sscan/Sscanf/Sprint/Fprint, os.Exit/Open/Create/ReadFile/Getenv/Stat/IsNotExist, os.File.Close/WriteString, os.FileInfo.Name/Size/IsDir, strconv.ParseInt/ParseFloat/FormatInt/FormatFloat/ParseBool/FormatBool, bufio.NewScanner/NewReader, bufio.Scanner.Scan/Text/Err, bufio.Reader.ReadString, sort.Ints/Strings/Slice, strings.Fields/TrimPrefix/TrimSuffix/Split/Join (real), time.Sleep/Now/Since/Hour/Minute/Second/Millisecond, rand.Intn/Float64/Seed, []byte(s) type conversion, named return values, fmt.Printf Stringer dispatch |
-| Runtime | ✅ Complete | - | println/print/float/string_concat/panic + goroutine_channel (unbuffered+buffered ring buffer) + map (FNV-1a, string-aware, iter, delete) + slice_append + closure_env global + string_eq + golangc_select + golangc_itoa/atoi + golangc_sprintf/printf + golangc_rune_to_string + golangc_os_args/init_args/os_args_get + golangc_string_decode_rune + strings package + math package + golangc_builder_{make,write_string,write_byte,string,reset,len} + golangc_errors_new + golangc_fmt_errorf + golangc_mutex_{make,lock,unlock,try_lock} + golangc_waitgroup_{make,add,done,wait} + golangc_file struct + golangc_os_stdout/stderr/stdin + golangc_fprintf + golangc_os_exit + golangc_os_open/create/file_close/file_write_string/getenv + golangc_parse_float/format_float/parse_bool/format_bool (strconv_ext.cpp) + golangc_scanner_{new,scan,text} + golangc_breader_{new,read_string} + golangc_os_read_file (bufio.cpp) + golangc_fmt_scan/scanln/scanf/sscan/sscanf (fmt_scan.cpp) + golangc_sort_ints/strings/slice (sort.cpp) + golangc_strings_fields/trim_prefix/trim_suffix/split/join + golangc_time_sleep/now/since + golangc_rand_seed/intn/float64 + golangc_os_stat/stat_error/is_not_exist + golangc_file_info_{name,size,is_dir} |
+| Sema | ✅ Complete | 110 | Type system, scopes, name resolution, type checking, interface satisfaction; sync.Map + strings.Replacer + regexp.Regexp opaque types added (Phases 38F-38G) |
+| IR | ✅ Complete | 101 | SSA-style IR, multi-return tuple types, map ops, slice make/append/index-addr, StringEq, make_array_type public; Phase 34: Mem2Reg+ConstFold+ConstProp+DCE passes, PassManager, type ownership fix; Phase 38H: is_rc_sret_string_call tracking, raii_cleanup_for_rhs extended; Phase 38I fix: regexp.MatchString/Regexp.MatchString return i1 (truncate i64→i1); single-LHS tuple unwrap in gen_short_var_decl |
+| CodeGen | ✅ Complete | 586 | x86-64 MASM, structs/methods/interfaces, floats, strings, slices (write+append), goroutines, buffered+unbuffered channels, maps (len/delete/iter), multi-return, closures, defer, switch (int/tagless/string/fallthrough), select (recv/send/default), variadic functions (pack+spread), pointer-receiver methods, iota, method calls on named-type constants, fmt/strconv/os/strings/math/errors/sync/bufio/sort/time/rand pseudo-packages, rune-to-string, for-range-string (UTF-8 runes), strings.Builder, errors.New, fmt.Errorf, sync.Mutex/WaitGroup/Once/Map, os.Stdout/Stderr/Stdin, fmt.Fprintf/Fprintln/Scan/Scanln/Scanf/Sscan/Sscanf/Sprint/Fprint, os.Exit/Open/Create/ReadFile/Getenv/Stat/IsNotExist/ReadDir, os.File.Close/WriteString/Read/Write/Seek, os.FileInfo.Name/Size/IsDir, strconv.ParseInt/ParseFloat/FormatInt/FormatFloat/ParseBool/FormatBool/Quote/Unquote/FormatUint/AppendInt, bufio.NewScanner/NewReader/NewWriter, bufio.Scanner.Scan/Text/Err, bufio.Reader.ReadString, bufio.Writer.WriteString/WriteByte/WriteRune/Flush/Buffered, sort.Ints/Strings/Slice, strings.Fields/TrimPrefix/TrimSuffix/Split/Join/Cut/LastIndexByte/TrimFunc/IndexFunc/FieldsFunc/NewReplacer, bytes.Buffer (full: WriteString/WriteByte/Write/WriteRune/String/Bytes/ReadByte/Grow/ReadFrom/Reset/Len), time.Sleep/Now/Since/Hour/Minute/Second/Millisecond, rand.Intn/Float64/Seed, []byte(s) type conversion, named return values, fmt.Printf Stringer dispatch, math trig/exp/log/bits, unicode extras, RAII auto-close (os.File/bufio.Writer), regexp (Compile/MustCompile/MatchString/FindString/FindAllString/FindStringSubmatch/ReplaceAllString/ReplaceAllLiteralString/Split/String/NumSubexp/FindStringIndex/SubexpNames) |
+| Runtime | ✅ Complete | 28 | All above + RC system (golangc_retain/release/rc_alloc_*/rc_slice_alloc) + RAII system (raii_vars_ scope-exit cleanup) + regexp (regexp.cpp; std::regex ECMAScript engine) + **Option C unified RC**: sret_string()/golangc_bytes_string/golangc_strings_replace*/golangc_format_float/bool/regexp.dup_string all use rc_alloc_string — callers must golangc_release() + free functions: golangc_builder_free/bytes_free/strings_replacer_free/sync_map_free/sync_once_free/mutex_free/waitgroup_free/regexp_free + leak test suite (tests/runtime/test_runtime_leaks.cpp, _CrtSetAllocHook, 28 tests) + **Phase 38I**: golangc_panic_overflow / golangc_panic_divzero wrappers |
 | Linker | ✅ Complete | - | MASM ml64 → obj → link.exe → PE .exe (via driver -o flag) |
 
 ## Detailed Progress Log
+
+### Session 38I - Phase 38I: Integer overflow detection + regexp.MatchString bool fix (2026-03-11)
+#### Completed
+- **`regexp.MatchString` bool return fix**: `regexp.MatchString(pattern, s)` IR gen was emitting `i64` for the bool field in the `(bool, error)` tuple. `fmt.Println(match)` therefore called `golangc_println_int` and printed `1` instead of `true`. Fix: after the `golangc_regexp_match_string_pkg` call (returns `int64_t`), emit `create_trunc(i64 → i1)` and use `i1_type()` as the tuple's first field. Same fix applied to `regexp.Regexp.MatchString` method. Verified: `fmt.Println(match)` now prints `true`.
+- **Single-LHS tuple unwrap in `gen_short_var_decl`**: Added check in the normal single-assignment path — if `rhs->type` is a struct (multi-return tuple) but the LHS variable expects a scalar type, automatically emit `ExtractValue(rhs, 0)`. This fixes all builtins returning `(T, error)` when assigned to a single variable (`matched := regexp.MatchString(...)`).
+- **`fmt.Println(bool)` codegen tests**: Added `FmtPrintlnBool` (uses `b := true`) and `FmtPrintlnBoolVarDecl` (uses `var b bool = true`) tests — both verify `golangc_println_bool` in generated ASM.
+- **Integer overflow detection** (Phase 38I core): Runtime inline jump checks for all signed int64 arithmetic:
+  - `add rax, rcx` → `jo funcname$ovf` (overflow flag → panic)
+  - `sub rax, rcx` → `jo funcname$ovf`
+  - `imul rax, rcx` → `jo funcname$ovf`
+  - `neg rax` → `jo funcname$ovf` (catches `neg INT64_MIN`)
+  - Before `idiv`: `test rcx, rcx` → `jz funcname$dvz` (explicit div-by-zero, replaces relying on CPU `#DE`)
+  - `%` (rem): same div-by-zero check before `idiv`
+- **Per-function panic trampolines**: `emit_overflow_labels()` emits `funcname$ovf:` / `funcname$dvz:` labels after the last basic block (before `ENDP`). Each trampoline: `sub rsp, 32` (shadow space) + `call golangc_panic_overflow` / `golangc_panic_divzero`. Labels only emitted when actually needed (`ovf_needed_` / `dvz_needed_` flags, reset per function). Zero overhead for functions with no arithmetic.
+- **New runtime functions**: `golangc_panic_overflow()` and `golangc_panic_divzero()` — thin `[[noreturn]]` wrappers calling `golangc_panic("runtime error: integer overflow")` / `golangc_panic("runtime error: integer divide by zero")`. Both declared in `runtime.hpp`, defined in `runtime.cpp`, added to `k_hardcoded_runtime[]` for EXTERN emission.
+- **End-to-end verified**: compiled and ran a Go program with `a / b` where `b = 0`; output: `goroutine 1 [running]:\npanic: runtime error: integer divide by zero`, exit code 2.
+- **3 new `Phase38GFixTest` tests**: RegexpMatchStringPkgBool, RegexpMatchStringSingleVar, RegexpMatchStringReturnBool
+- **2 new `PseudoPkgTest` tests**: FmtPrintlnBool, FmtPrintlnBoolVarDecl
+- **10 new `OverflowCheckTest` tests**: AddEmitsJo, SubEmitsJo, MulEmitsJo, DivEmitsDivzeroCheck, RemEmitsDivzeroCheck, NegEmitsJo, OvfLabelEmitted, DvzLabelEmitted, NoOvfLabelWhenNoArith, ExternPanicFunctionsEmitted
+- **1026 total tests passing** (1016 → 1026: 15 new codegen tests, 0 regressions)
+#### Files Modified
+- `src/ir/ir_gen_expr.cpp` — `regexp.MatchString`: emit `create_trunc(i64→i1)`, use `i1_type()` in tuple fields; same fix for `regexp.Regexp.MatchString`
+- `src/ir/ir_gen_stmt.cpp` — single-LHS tuple unwrap: if `rhs->type->is_struct()` and `!var_type->is_struct()`, emit `ExtractValue(rhs, 0)` before store
+- `src/runtime/runtime.hpp` — declare `golangc_panic_overflow`, `golangc_panic_divzero`
+- `src/runtime/runtime.cpp` — implement `golangc_panic_overflow`, `golangc_panic_divzero`
+- `src/codegen/x64_codegen.hpp` — add `ovf_needed_`, `dvz_needed_` bool fields; declare `emit_overflow_labels()`
+- `src/codegen/x64_codegen.cpp` — reset booleans in `emit_function`; call `emit_overflow_labels()` before `ENDP`; implement `emit_overflow_labels()`; add `golangc_panic_overflow/divzero` to `k_hardcoded_runtime[]`
+- `src/codegen/x64_codegen_inst.cpp` — `emit_arith()`: `jo` after add/sub/imul; `emit_div_rem()`: `test rcx,rcx`+`jz` before `cqo/idiv`; `emit_neg()`: `jo` after `neg`
+- `tests/codegen/test_codegen.cpp` — 15 new tests (Phase38GFixTest×3, PseudoPkgTest×2, OverflowCheckTest×10)
+#### Next Steps
+- Phase 38J: `encoding/json` basics (Marshal/Unmarshal for structs with struct tags), `net/http` client stub (Get/Post/Response.Body), `context` package stub (Background/TODO/WithCancel/WithTimeout/WithValue), `os.Args` slice, unsigned integer overflow detection (wrapping vs panicking distinction)
+
+### Session 38H - Phase 38H: Memory leak management — Option C (2026-03-09)
+#### Completed
+- **Memory leak analysis**: Identified three allocation patterns in the runtime: RC-tracked (`rc_alloc_string/map/chan`), opaque handles (`builder_make`, `sync_map_new`, etc.), and plain-malloc sret strings. The core problem: most sret string functions used plain `malloc`, leaving callers unable to free via the RC system.
+- **Option C — unified RC ownership for all sret strings**: Switched `sret_string()` helper (20+ callers), `golangc_bytes_string`, `golangc_strings_replace`, `golangc_strings_replacer_replace`, `golangc_strings_trim_func`, `golangc_strings_join`, `golangc_format_float`, `golangc_format_bool`, and `regexp.cpp dup_string` from `malloc` to `rc_alloc_string`. All sret string ptrs now have refcount=1; callers release via `golangc_release()` instead of `free()`.
+- **Missing `_free` functions added** (8 new functions): `golangc_builder_free` (frees buf+struct), `golangc_bytes_free` (frees data+struct), `golangc_strings_replacer_free` (frees old_str+new_str+struct), `golangc_sync_map_free` (walks all 64 buckets, frees entries+struct), `golangc_sync_once_free`, `golangc_mutex_free` (DeleteCriticalSection+free), `golangc_waitgroup_free` (CloseHandle+DeleteCriticalSection+free), `golangc_regexp_free` (delete golangc_regexp). All declared in `runtime.hpp`.
+- **RAII extended** (`raii_cleanup_for_rhs` in ir_gen_stmt.cpp): now covers `strings.NewReplacer→golangc_strings_replacer_free`, `bytes.NewBuffer/NewBufferString→golangc_bytes_free`, `regexp.Compile/MustCompile→golangc_regexp_free` in addition to existing os.File/bufio.Writer entries.
+- **`is_rc_sret_string_call()` in ir_gen_stmt.cpp**: new static helper listing all builtins that return RC-tracked sret strings (`fmt.Sprintf`, `strings.ToUpper/ToLower/TrimSpace/Repeat/Trim/Replace/TrimPrefix/TrimSuffix/Join/Map/Title/TrimFunc/Cut`, `strings.Replacer.Replace`, `strconv.Itoa/FormatInt/FormatFloat/FormatBool/FormatUint/Quote`, `bytes.Buffer.String`). When assigned to a string variable, the alloca is registered in `rc_vars_` with sentinel `Opcode::Call` so scope-exit emits `golangc_release()` automatically.
+- **Leak test suite**: `tests/runtime/test_runtime_leaks.cpp` (new file) — uses MSVC `_CrtSetAllocHook` to count net allocations per test scope. 28 tests covering: strings.Builder, strings.Replacer, sync.Map, sync.Once, sync.Mutex, sync.WaitGroup, bytes.Buffer, all regexp operations (Compile/FindString/FindAllString/FindStringSubmatch/ReplaceAllString/Split/FindStringIndex), RC retain/release, golangc_map iter, strings.TrimFunc.
+- **CMakeLists.txt** updated: `test_runtime_leaks` executable target added, links `golangc_runtime + GTest::gtest`, registered as `RuntimeLeakTests` CTest suite.
+- **Bug found by tests**: `golangc_bytes_string` was using plain `malloc` but test called `golangc_release` on result — use-after-free. Fixed by switching to `rc_alloc_string`.
+- **`_CrtSetAllocHook` gotcha**: running via `ctest` pipe mode causes the hook to hang (CRT internal alloc from pipe setup). Always run `test_runtime_leaks.exe` directly. Noted in memory.md.
+- **28 new `RuntimeLeakTest` tests**: BuilderMakeAndFree, BuilderWriteStringAndFree, BuilderStringAndFree, StringsReplacerMakeAndFree, StringsReplacerReplaceAndFree, StringsReplacerNullOld, SyncMapNewAndFree, SyncMapStoreDeleteAndFree, SyncMapMultipleEntriesFree, SyncOnceMakeAndFree, MutexMakeAndFree, MutexLockUnlockFree, WaitGroupMakeAndFree, BytesBufferMakeAndFree, BytesBufferWriteAndFree, BytesBufferGrowAndFree, RegexpCompileAndFree, RegexpFindStringAndFree, RegexpFindAllStringAndFree, RegexpFindStringSubmatchAndFree, RegexpReplaceAllStringAndFree, RegexpSplitAndFree, RegexpFindStringIndexAndFree, RCStringRetainRelease, MapMakeAndFree, MapSetGetAndFree, MapIteratorMakeAndFree, StringsTrimFuncAndFree.
+- **1016 total tests passing** (988 → 1016: 28 new RuntimeLeakTest, 0 regressions)
+#### Files Modified
+- `src/runtime/runtime.cpp` — `sret_string()` helper → `rc_alloc_string`; `golangc_bytes_string/strings_replace/strings_trim_func/strings_join/strings_replacer_replace` → `rc_alloc_string`; added `golangc_builder_free`, `golangc_bytes_free`, `golangc_strings_replacer_free`, `golangc_sync_map_free`, `golangc_sync_once_free`
+- `src/runtime/sync.cpp` — added `golangc_mutex_free`, `golangc_waitgroup_free`
+- `src/runtime/regexp.cpp` — `dup_string` → `rc_alloc_string`; added `golangc_regexp_free`; added `extern void* rc_alloc_string(size_t)`
+- `src/runtime/strconv_ext.cpp` — `golangc_format_float/bool` → `rc_alloc_string`; added `extern void* rc_alloc_string(size_t)`
+- `src/runtime/runtime.hpp` — 8 new free function declarations; `golangc_regexp_free` declaration
+- `src/ir/ir_gen_stmt.cpp` — `is_rc_sret_string_call()` helper; sret RC string tracking in `gen_short_var_decl`; `raii_cleanup_for_rhs` extended with 3 new entries
+- `tests/runtime/test_runtime_leaks.cpp` — new file; 28 RuntimeLeakTest tests
+- `tests/CMakeLists.txt` — `test_runtime_leaks` target + `RuntimeLeakTests` ctest entry
+#### Next Steps
+- Phase 38I: `encoding/json` basics (Marshal/Unmarshal for structs), `net/http` client stub (Get/Post/Response), `context` package stub (Background/TODO/WithCancel/WithTimeout), `os.Args` improvements
+
+### Session 38G - Phase 38G: regexp package (2026-03-09)
+#### Completed
+- **`regexp` package**: Full `regexp.Regexp` opaque named type in universe.cpp with 12 method stubs (MatchString, FindString, FindAllString, FindStringSubmatch, ReplaceAllString, ReplaceAllLiteralString, Split, String, NumSubexp, FindStringIndex, FindAllStringIndex, SubexpNames). `regexp_regexp_ptr_type()` accessor added to universe.hpp/cpp. `checker_type.cpp` maps `regexp.Regexp` qualified type. `checker_expr.cpp` has pkg-level dispatch (Compile→(Regexp,error), MustCompile→Regexp, MatchString→(bool,error)) and method dispatch block (11 methods in table + FindAllStringIndex special case). IR gen block at `"regexp.Regexp."` prefix (14 chars) handles all methods with correct sret/slice semantics.
+- **`src/runtime/regexp.cpp`** (new file): `golangc_regexp` struct wraps `std::regex` (ECMAScript mode) + pattern string + num_subexp + valid flag. Internal helpers: `gs_to_string`, `dup_string`, `write_gostring`, `write_string_slice`, `write_int_slice`, `count_groups`. 13 public runtime functions: `compile` (try/catch), `must_compile` (exits on invalid), `match_string_pkg` (compile+match+delete), `match_string`, `find_string` (sret GoString), `find_all_string` (sret []string via sregex_iterator), `find_string_submatch` (sret []string), `replace_all_string`, `replace_all_literal_string` (escapes `$`→`$$`), `split`, `string` (sret GoString), `num_subexp`, `find_string_index` (sret []int).
+- **`regexp` pseudo-package registration**: `(void)scope->insert(make_pseudo_pkg("regexp"))` added to `init_universe()` in universe.cpp — without this all regexp sema checks fail with "unrecognized package" error.
+- **`src/CMakeLists.txt`**: `runtime/regexp.cpp` added to `golangc_runtime` STATIC library target.
+- **15 new `Phase38GTest` tests**: RegexpCompileCompilesNoError, RegexpMustCompileCompilesNoError, RegexpMatchStringPkgCompilesAndCallsRuntime, RegexpMatchStringMethodCompilesAndCallsRuntime, RegexpFindStringCompilesAndCallsRuntime, RegexpFindAllStringCompilesAndCallsRuntime, RegexpFindStringSubmatchCompilesAndCallsRuntime, RegexpReplaceAllStringCompilesAndCallsRuntime, RegexpReplaceAllLiteralStringCompilesAndCallsRuntime, RegexpSplitCompilesAndCallsRuntime, RegexpStringMethodCompilesAndCallsRuntime, RegexpNumSubexpCompilesAndCallsRuntime, RegexpFindStringIndexCompilesAndCallsRuntime, RegexpSubexpNamesCompilesAndCallsRuntime, RegexpExternDeclared.
+- **988 total tests passing** (973 → 988, 0 regressions)
+#### Files Modified
+- `src/sema/universe.hpp` — 15 new BuiltinIds (RegexpCompile/MustCompile/MatchString/MatchStringMethod/FindString/FindAllString/FindStringSubmatch/ReplaceAllString/ReplaceAllLiteralString/Split/String/NumSubexp/FindStringIndex/FindAllStringIndex/SubexpNames); `regexp_regexp_ptr_type()` accessor declaration
+- `src/sema/universe.cpp` — `regexp.Regexp` opaque type with 12 methods; `g_regexp_regexp_ptr_type` singleton; accessor function; `make_pseudo_pkg("regexp")` registration in `init_universe()`
+- `src/sema/checker_type.cpp` — `regexp.Regexp` qualified type resolution → `regexp_regexp_ptr_type()`
+- `src/sema/checker_expr.cpp` — `regexp` pkg-level dispatch (Compile/MustCompile/MatchString); `regexp.Regexp` method dispatch block (11 table entries + FindAllStringIndex)
+- `src/ir/ir_gen_expr.cpp` — full `"regexp.Regexp."` prefix dispatch (14 chars); all methods with correct sret/slice/primitive return handling
+- `src/runtime/runtime.hpp` — `struct golangc_regexp` forward decl; 13 function declarations with sret annotations
+- `src/runtime/regexp.cpp` — new file; `std::regex` ECMAScript engine; all 13 runtime implementations
+- `src/CMakeLists.txt` — `runtime/regexp.cpp` added to `golangc_runtime`
+- `tests/codegen/test_codegen.cpp` — 15 Phase38GTest tests
+#### Next Steps
+- Phase 38H: `encoding/json` basics (Marshal/Unmarshal for structs), `net/http` client stub (Get/Post/Response), `os.Args` improvements, `fmt.Sscanf` bug fixes, `context` package stub (Background/TODO/WithCancel/WithTimeout)
+
+### Session 38F - Phase 38F: bytes.Buffer extras, strings.NewReplacer, sync.Map, strings.TrimFunc (2026-03-09)
+#### Completed
+- **`bytes.Buffer` extras**: `WriteRune` (UTF-8 encode), `Bytes()` (slice sret 24-byte {ptr,len,cap}), `ReadByte()` (byte+error tuple, uses new `read_pos` field), `Grow(n)`, `ReadFrom(r)` (simplified: reads from strings.Reader as GoString*). `read_pos` field added to `golangc_bytes_buffer` struct; `golangc_bytes_reset` clears it. `buf_map[]` in checker_expr.cpp changed from `static const` to local so non-constexpr BuiltinId values work; added `ret=3` for slice return type → `[]byte`.
+- **`strings.NewReplacer` / `strings.Replacer.Replace` / `.WriteString`**: new opaque named type `strings.Replacer` in universe.cpp with methods Replace/WriteString; accessor `strings_replacer_ptr_type()`; `checker_type.cpp` maps `strings.Replacer` qualified type; checker_expr.cpp method dispatch block; IR gen prefix `"strings.Replacer."` (17 chars — bug: was coded as 18); runtime `golangc_strings_new_replacer` (malloc old/new copies), `golangc_strings_replacer_replace` (count+replace loop via sret), `golangc_strings_replacer_write_string` (replace→stdout simplified).
+- **`sync.Map`**: new opaque named type `sync.Map` in universe.cpp with Store/Load/Delete/LoadOrStore/Range methods; accessor `sync_map_ptr_type()`; `checker_type.cpp` maps `sync.Map` qualified type; checker_expr.cpp method dispatch block; IR gen; `var m sync.Map` auto-initializes via `golangc_sync_map_new()`; runtime: simplified int64 key/val hashmap with 64-bucket FNV-1a (single-linked chain per bucket).
+- **`strings.TrimFunc` / `IndexFunc` / `FieldsFunc`**: new BuiltinIds; checker_expr.cpp dispatch; IR gen passes function pointer as `void*`; runtime impls (TrimFunc trims ASCII satisfying predicate; IndexFunc finds first match; FieldsFunc returns empty slice stub).
+- **RAII auto-close (Phase 38E)**: `raii_vars_` map (alloca→cleanup_fn_name); `raii_cleanup_for_rhs()` detects `os.Open/Create/OpenFile` → `golangc_os_file_close`, `bufio.NewWriter` → `golangc_bufio_writer_close`; hooks in multi-return (index-0 handle) and single-assign short-var-decl; `emit_raii` lambda in `gen_return` (all 4 paths) and fall-through in `gen_func_decl`; overwrite cleanup in `gen_assign`; `golangc_bufio_writer_close` (flush+free) added to runtime.
+- **13 new `Phase38FTest` tests** + **7 `Phase38ETest` tests**: BytesBufferWriteRune/Bytes/ReadByte/Grow, StringsNewReplacer/Replace/ExternDeclared, StringsTrimFunc/IndexFunc, SyncMapStore/NewAutoInit/Delete/Range, OsOpenRAII/OsCreateRAII/BufioWriterRAII/ExplicitReturn/NoClose.
+- **973 total tests passing** (960 → 973, 0 regressions)
+#### Files Modified
+- `src/sema/universe.hpp` — 20 new BuiltinIds (BytesBufferWriteRune/Bytes/ReadByte/Grow/ReadFrom, StringsNewReplacer/ReplacerReplace/ReplacerWriteString, StringsTrimFunc/IndexFunc/FieldsFunc, SyncMapStore/Load/Delete/LoadOrStore/Range); new accessors `strings_replacer_ptr_type()`, `sync_map_ptr_type()`
+- `src/sema/universe.cpp` — bytes.Buffer extra methods; `strings.Replacer` opaque type; `sync.Map` opaque type; accessor functions
+- `src/sema/checker_type.cpp` — `sync.Map` and `strings.Replacer` qualified type resolution
+- `src/sema/checker_expr.cpp` — bytes.Buffer buf_map extended (WriteRune/Bytes/ReadByte/Grow/ReadFrom + ret=3 slice); strings package NewReplacer/TrimFunc/IndexFunc/FieldsFunc; strings.Replacer method dispatch; sync.Map method dispatch
+- `src/ir/ir_gen.hpp` — `raii_vars_` map; `raii_cleanup_for_rhs` free helper
+- `src/ir/ir_gen_stmt.cpp` — RAII hooks in short-var-decl (multi-return + single-assign); `emit_raii` lambda in gen_return; gen_assign old-value cleanup; sync.Map auto-init in gen_local_var_spec
+- `src/ir/ir_gen_decl.cpp` — `raii_vars_.clear()` at function start; fall-through RAII cleanup in gen_func_decl
+- `src/ir/ir_gen_expr.cpp` — bytes.Buffer WriteRune/Bytes/ReadByte/Grow/ReadFrom; strings.NewReplacer; strings.Replacer.* (prefix fix: 17 chars); strings.TrimFunc/IndexFunc/FieldsFunc; sync.Map.*
+- `src/runtime/runtime.hpp` — all new declarations
+- `src/runtime/runtime.cpp` — `read_pos` field + reset; golangc_bytes_{write_rune,bytes,read_byte,grow,read_from}; golangc_strings_{new_replacer,replacer_replace,replacer_write_string,trim_func,index_func,fields_func}; golangc_sync_map_*; golangc_bufio_writer_close
+- `tests/codegen/test_codegen.cpp` — 13 Phase38FTest + 7 Phase38ETest tests
+#### Next Steps
+- Phase 38G: `regexp` package stub (Compile/MustCompile/FindString/FindAllString/ReplaceAll/MatchString), `encoding/json` stub (Marshal/Unmarshal basics), `net/http` client stub (Get/Post), `os.Args` slice indexing improvements, `fmt.Stringer` interface improvements
 
 ### Session 38D - Phase 38D: strings.LastIndexByte/Builder.WriteRune, strconv.Quote/Unquote, bufio.Writer, sync.Once (2026-03-06)
 #### Completed

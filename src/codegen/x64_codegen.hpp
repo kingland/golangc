@@ -279,6 +279,14 @@ private:
     int32_t sret_slot_ = 0;
     bool has_sret_ = false;
 
+    /// Set when any overflow-checked arithmetic is emitted in the current function.
+    bool ovf_needed_ = false;
+    /// Set when any divide-by-zero check is emitted in the current function.
+    bool dvz_needed_ = false;
+
+    /// Emit overflow/divzero panic tail labels at the end of a function body.
+    void emit_overflow_labels(const ir::Function& func);
+
     /// Deferred calls collected during function emission (replayed LIFO at ret).
     std::vector<const ir::Instruction*> defers_;
 

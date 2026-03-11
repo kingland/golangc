@@ -48,6 +48,15 @@ Type* g_bufio_writer_ptr_type = nullptr;
 // Singleton sync.Once pointer type (*sync.Once)
 Type* g_sync_once_ptr_type = nullptr;
 
+// Singleton strings.Replacer pointer type (*strings.Replacer)
+Type* g_strings_replacer_ptr_type = nullptr;
+
+// Singleton sync.Map pointer type (*sync.Map)
+Type* g_sync_map_ptr_type = nullptr;
+
+// Singleton regexp.Regexp pointer type (*regexp.Regexp)
+Type* g_regexp_regexp_ptr_type = nullptr;
+
 void ensure_basic_types_initialized() {
     if (g_basic_types_initialized) return;
     g_basic_types_initialized = true;
@@ -154,6 +163,18 @@ Type* sync_once_ptr_type() {
     return g_sync_once_ptr_type;
 }
 
+Type* strings_replacer_ptr_type() {
+    return g_strings_replacer_ptr_type;
+}
+
+Type* sync_map_ptr_type() {
+    return g_sync_map_ptr_type;
+}
+
+Type* regexp_regexp_ptr_type() {
+    return g_regexp_regexp_ptr_type;
+}
+
 Scope* init_universe(ArenaAllocator& arena) {
     ensure_basic_types_initialized();
 
@@ -256,6 +277,7 @@ Scope* init_universe(ArenaAllocator& arena) {
     (void)scope->insert(make_pseudo_pkg("bytes"));
     (void)scope->insert(make_pseudo_pkg("filepath"));
     (void)scope->insert(make_pseudo_pkg("bits"));
+    (void)scope->insert(make_pseudo_pkg("regexp"));
 
     // ---- error interface type ----
     // type error interface { Error() string }
@@ -457,7 +479,12 @@ Scope* init_universe(ArenaAllocator& arena) {
     buf_named->methods.push_back(NamedType::Method{"WriteString", void_ty, true});
     buf_named->methods.push_back(NamedType::Method{"WriteByte",   void_ty, true});
     buf_named->methods.push_back(NamedType::Method{"Write",       void_ty, true});
+    buf_named->methods.push_back(NamedType::Method{"WriteRune",   void_ty, true});
     buf_named->methods.push_back(NamedType::Method{"String",      void_ty, true});
+    buf_named->methods.push_back(NamedType::Method{"Bytes",       void_ty, true});
+    buf_named->methods.push_back(NamedType::Method{"ReadByte",    void_ty, true});
+    buf_named->methods.push_back(NamedType::Method{"Grow",        void_ty, true});
+    buf_named->methods.push_back(NamedType::Method{"ReadFrom",    void_ty, true});
     buf_named->methods.push_back(NamedType::Method{"Reset",       void_ty, true});
     buf_named->methods.push_back(NamedType::Method{"Len",         void_ty, true});
 
@@ -558,6 +585,82 @@ Scope* init_universe(ArenaAllocator& arena) {
     once_ptr_ty->pointer.base = once_named_ty;
 
     g_sync_once_ptr_type = once_ptr_ty;
+
+    // ---- strings.Replacer opaque named type ----
+    auto* replacer_underlying = arena.create<Type>();
+    replacer_underlying->kind = TypeKind::Basic;
+    replacer_underlying->basic = BasicKind::Uintptr;
+
+    auto* replacer_named = arena.create<NamedType>();
+    replacer_named->name = "strings.Replacer";
+    replacer_named->underlying = replacer_underlying;
+    replacer_named->methods.push_back(NamedType::Method{"Replace",      void_ty, true});
+    replacer_named->methods.push_back(NamedType::Method{"WriteString",  void_ty, true});
+
+    auto* replacer_named_ty = arena.create<Type>();
+    replacer_named_ty->kind = TypeKind::Named;
+    replacer_named_ty->named = replacer_named;
+
+    auto* replacer_ptr_ty = arena.create<Type>();
+    replacer_ptr_ty->kind = TypeKind::Pointer;
+    replacer_ptr_ty->pointer.base = replacer_named_ty;
+
+    g_strings_replacer_ptr_type = replacer_ptr_ty;
+
+    // ---- sync.Map opaque named type ----
+    auto* smap_underlying = arena.create<Type>();
+    smap_underlying->kind = TypeKind::Basic;
+    smap_underlying->basic = BasicKind::Uintptr;
+
+    auto* smap_named = arena.create<NamedType>();
+    smap_named->name = "sync.Map";
+    smap_named->underlying = smap_underlying;
+    smap_named->methods.push_back(NamedType::Method{"Store",        void_ty, true});
+    smap_named->methods.push_back(NamedType::Method{"Load",         void_ty, true});
+    smap_named->methods.push_back(NamedType::Method{"Delete",       void_ty, true});
+    smap_named->methods.push_back(NamedType::Method{"LoadOrStore",  void_ty, true});
+    smap_named->methods.push_back(NamedType::Method{"Range",        void_ty, true});
+
+    auto* smap_named_ty = arena.create<Type>();
+    smap_named_ty->kind = TypeKind::Named;
+    smap_named_ty->named = smap_named;
+
+    auto* smap_ptr_ty = arena.create<Type>();
+    smap_ptr_ty->kind = TypeKind::Pointer;
+    smap_ptr_ty->pointer.base = smap_named_ty;
+
+    g_sync_map_ptr_type = smap_ptr_ty;
+
+    // ---- regexp.Regexp opaque named type ----
+    auto* re_underlying = arena.create<Type>();
+    re_underlying->kind = TypeKind::Basic;
+    re_underlying->basic = BasicKind::Uintptr;
+
+    auto* re_named = arena.create<NamedType>();
+    re_named->name = "regexp.Regexp";
+    re_named->underlying = re_underlying;
+    re_named->methods.push_back(NamedType::Method{"MatchString",              void_ty, true});
+    re_named->methods.push_back(NamedType::Method{"FindString",               void_ty, true});
+    re_named->methods.push_back(NamedType::Method{"FindAllString",            void_ty, true});
+    re_named->methods.push_back(NamedType::Method{"FindStringSubmatch",       void_ty, true});
+    re_named->methods.push_back(NamedType::Method{"ReplaceAllString",         void_ty, true});
+    re_named->methods.push_back(NamedType::Method{"ReplaceAllLiteralString",  void_ty, true});
+    re_named->methods.push_back(NamedType::Method{"Split",                    void_ty, true});
+    re_named->methods.push_back(NamedType::Method{"String",                   void_ty, true});
+    re_named->methods.push_back(NamedType::Method{"NumSubexp",                int_ty2, true});
+    re_named->methods.push_back(NamedType::Method{"FindStringIndex",          void_ty, true});
+    re_named->methods.push_back(NamedType::Method{"FindAllStringIndex",       void_ty, true});
+    re_named->methods.push_back(NamedType::Method{"SubexpNames",              void_ty, true});
+
+    auto* re_named_ty = arena.create<Type>();
+    re_named_ty->kind = TypeKind::Named;
+    re_named_ty->named = re_named;
+
+    auto* re_ptr_ty = arena.create<Type>();
+    re_ptr_ty->kind = TypeKind::Pointer;
+    re_ptr_ty->pointer.base = re_named_ty;
+
+    g_regexp_regexp_ptr_type = re_ptr_ty;
 
     return scope;
 }

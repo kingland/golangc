@@ -46,3 +46,10 @@ add_executable(test_codegen
 )
 target_link_libraries(test_codegen PRIVATE golangc_codegen golangc_ir golangc_sema golangc_parser golangc_lexer GTest::gtest GTest::gtest_main)
 add_test(NAME CodegenTests COMMAND test_codegen)
+
+# Runtime memory-leak tests
+add_executable(test_runtime_leaks
+    runtime/test_runtime_leaks.cpp
+)
+target_link_libraries(test_runtime_leaks PRIVATE golangc_runtime GTest::gtest)
+add_test(NAME RuntimeLeakTests COMMAND test_runtime_leaks)

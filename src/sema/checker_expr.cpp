@@ -659,11 +659,41 @@ ExprInfo Checker::check_pseudo_pkg_selector(const Symbol& pkg_sym,
             return info;
         }
         if (sel == "LastIndexByte") { info.symbol = make_member_builtin(BuiltinId::StringsLastIndexByte); info.type = int_type; return info; }
+        if (sel == "TrimFunc")     { info.symbol = make_member_builtin(BuiltinId::StringsTrimFunc);     info.type = str_type;  return info; }
+        if (sel == "IndexFunc")    { info.symbol = make_member_builtin(BuiltinId::StringsIndexFunc);    info.type = int_type;  return info; }
+        if (sel == "FieldsFunc")   { info.symbol = make_member_builtin(BuiltinId::StringsFieldsFunc);   info.type = str_slice; return info; }
+        if (sel == "NewReplacer") {
+            info.symbol = make_member_builtin(BuiltinId::StringsNewReplacer);
+            info.type = strings_replacer_ptr_type();
+            return info;
+        }
         if (sel == "NewReader") {
             info.symbol = make_member_builtin(BuiltinId::StringsNewReader);
             info.type = strings_reader_ptr_type();
             return info;
         }
+    }
+
+    if (pkg == "regexp") {
+        auto* str_type  = basic_type(BasicKind::String);
+        auto* bool_type = basic_type(BasicKind::Bool);
+        auto* re_type   = regexp_regexp_ptr_type();
+        if (sel == "Compile") {
+            info.symbol = make_member_builtin(BuiltinId::RegexpCompile);
+            info.type = make_tuple_type({re_type, error_type()});
+            return info;
+        }
+        if (sel == "MustCompile") {
+            info.symbol = make_member_builtin(BuiltinId::RegexpMustCompile);
+            info.type = re_type;
+            return info;
+        }
+        if (sel == "MatchString") {
+            info.symbol = make_member_builtin(BuiltinId::RegexpMatchString);
+            info.type = make_tuple_type({bool_type, error_type()});
+            return info;
+        }
+        (void)str_type;
     }
 
     if (pkg == "io") {
@@ -1144,13 +1174,17 @@ ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
             base->named->name == "bytes.Buffer") {
             auto* str_ret  = basic_type(BasicKind::String);
             auto* int_ret  = basic_type(BasicKind::Int);
-            static const struct {
-                std::string_view sel; BuiltinId id; int ret; // 0=void,1=str,2=int
-            } buf_map[] = {
+            struct BufEntry { std::string_view sel; BuiltinId id; int ret; }; // 0=void,1=str,2=int,3=slice
+            const BufEntry buf_map[] = {
                 {"WriteString", BuiltinId::BytesBufferWriteString, 0},
                 {"WriteByte",   BuiltinId::BytesBufferWriteByte,   0},
                 {"Write",       BuiltinId::BytesBufferWrite,       0},
+                {"WriteRune",   BuiltinId::BytesBufferWriteRune,   0},
                 {"String",      BuiltinId::BytesBufferString,      1},
+                {"Bytes",       BuiltinId::BytesBufferBytes,       3},
+                {"ReadByte",    BuiltinId::BytesBufferReadByte,    2},
+                {"Grow",        BuiltinId::BytesBufferGrow,        0},
+                {"ReadFrom",    BuiltinId::BytesBufferReadFrom,    2},
                 {"Reset",       BuiltinId::BytesBufferReset,       0},
                 {"Len",         BuiltinId::BytesBufferLen,         2},
             };
@@ -1165,8 +1199,10 @@ ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
                     std::memcpy(stored, full.data(), full.size() + 1);
                     sym->name = std::string_view(stored, full.size());
                     info.symbol = sym;
+                    auto* byte_slice = make_slice_type(basic_type(BasicKind::Uint8));
                     info.type = bm.ret == 1 ? str_ret
                               : bm.ret == 2 ? int_ret
+                              : bm.ret == 3 ? byte_slice
                                             : nullptr;
                     info.needs_addr_for_recv = false;
                     return info;
@@ -1251,6 +1287,120 @@ ExprInfo Checker::check_selector(ast::SelectorExpr& expr) {
                 info.symbol = sym;
                 info.type = nullptr; // void
                 info.needs_addr_for_recv = false;
+                return info;
+            }
+        }
+
+        // strings.Replacer methods
+        if (base->kind == TypeKind::Named && base->named &&
+            base->named->name == "strings.Replacer") {
+            struct { std::string_view sel; BuiltinId id; int ret; } rm[] = {
+                {"Replace",      BuiltinId::StringsReplacerReplace,      1}, // 1=string
+                {"WriteString",  BuiltinId::StringsReplacerWriteString,  2}, // 2=int
+            };
+            auto* str_type = basic_type(BasicKind::String);
+            auto* int_type = basic_type(BasicKind::Int);
+            for (const auto& r : rm) {
+                if (sel_name == r.sel) {
+                    auto* sym = arena_.create<Symbol>();
+                    sym->kind = SymbolKind::Builtin;
+                    sym->builtin_id = static_cast<int>(r.id);
+                    sym->used = true;
+                    std::string full = "strings.Replacer." + std::string(sel_name);
+                    auto* stored = arena_.allocate_array<char>(full.size() + 1);
+                    std::memcpy(stored, full.data(), full.size() + 1);
+                    sym->name = std::string_view(stored, full.size());
+                    info.symbol = sym;
+                    info.type = (r.ret == 1) ? str_type : int_type;
+                    return info;
+                }
+            }
+        }
+
+        // sync.Map methods
+        if (base->kind == TypeKind::Named && base->named &&
+            base->named->name == "sync.Map") {
+            auto* iface_type = error_type(); // use interface{} approximation for values
+            auto* bool_type  = basic_type(BasicKind::Bool);
+            struct { std::string_view sel; BuiltinId id; } sm[] = {
+                {"Store",       BuiltinId::SyncMapStore},
+                {"Load",        BuiltinId::SyncMapLoad},
+                {"Delete",      BuiltinId::SyncMapDelete},
+                {"LoadOrStore", BuiltinId::SyncMapLoadOrStore},
+                {"Range",       BuiltinId::SyncMapRange},
+            };
+            for (const auto& m : sm) {
+                if (sel_name == m.sel) {
+                    auto* sym = arena_.create<Symbol>();
+                    sym->kind = SymbolKind::Builtin;
+                    sym->builtin_id = static_cast<int>(m.id);
+                    sym->used = true;
+                    std::string full = "sync.Map." + std::string(sel_name);
+                    auto* stored = arena_.allocate_array<char>(full.size() + 1);
+                    std::memcpy(stored, full.data(), full.size() + 1);
+                    sym->name = std::string_view(stored, full.size());
+                    info.symbol = sym;
+                    // Load returns (interface{}, bool), others void
+                    if (sel_name == "Load") {
+                        info.type = make_tuple_type({iface_type, bool_type});
+                    } else if (sel_name == "LoadOrStore") {
+                        info.type = make_tuple_type({iface_type, bool_type});
+                    } else {
+                        info.type = nullptr;
+                    }
+                    return info;
+                }
+            }
+        }
+
+        // regexp.Regexp methods
+        if (base->kind == TypeKind::Named && base->named &&
+            base->named->name == "regexp.Regexp") {
+            auto* str_type  = basic_type(BasicKind::String);
+            auto* bool_type = basic_type(BasicKind::Bool);
+            auto* int_type  = basic_type(BasicKind::Int);
+            auto* str_slice = make_slice_type(str_type);
+            auto* int_slice = make_slice_type(int_type);
+            struct { std::string_view sel; BuiltinId id; Type* ret; } rm[] = {
+                {"MatchString",             BuiltinId::RegexpMatchStringMethod,     bool_type},
+                {"FindString",              BuiltinId::RegexpFindString,            str_type},
+                {"FindAllString",           BuiltinId::RegexpFindAllString,         str_slice},
+                {"FindStringSubmatch",      BuiltinId::RegexpFindStringSubmatch,    str_slice},
+                {"ReplaceAllString",        BuiltinId::RegexpReplaceAllString,      str_type},
+                {"ReplaceAllLiteralString", BuiltinId::RegexpReplaceAllLiteralString, str_type},
+                {"Split",                   BuiltinId::RegexpSplit,                 str_slice},
+                {"String",                  BuiltinId::RegexpString,                str_type},
+                {"NumSubexp",               BuiltinId::RegexpNumSubexp,             int_type},
+                {"FindStringIndex",         BuiltinId::RegexpFindStringIndex,       int_slice},
+                {"SubexpNames",             BuiltinId::RegexpSubexpNames,           str_slice},
+            };
+            for (const auto& r : rm) {
+                if (sel_name == r.sel) {
+                    auto* sym = arena_.create<Symbol>();
+                    sym->kind = SymbolKind::Builtin;
+                    sym->builtin_id = static_cast<int>(r.id);
+                    sym->used = true;
+                    std::string full = "regexp.Regexp." + std::string(sel_name);
+                    auto* stored = arena_.allocate_array<char>(full.size() + 1);
+                    std::memcpy(stored, full.data(), full.size() + 1);
+                    sym->name = std::string_view(stored, full.size());
+                    info.symbol = sym;
+                    info.type = r.ret;
+                    return info;
+                }
+            }
+            // FindAllStringIndex returns [][]int — not in the simple table
+            if (sel_name == "FindAllStringIndex") {
+                auto* sym = arena_.create<Symbol>();
+                sym->kind = SymbolKind::Builtin;
+                sym->builtin_id = static_cast<int>(BuiltinId::RegexpFindAllStringIndex);
+                sym->used = true;
+                std::string full = "regexp.Regexp.FindAllStringIndex";
+                auto* stored = arena_.allocate_array<char>(full.size() + 1);
+                std::memcpy(stored, full.data(), full.size() + 1);
+                sym->name = std::string_view(stored, full.size());
+                info.symbol = sym;
+                info.type = make_slice_type(int_slice); // [][]int simplified as []int
                 return info;
             }
         }

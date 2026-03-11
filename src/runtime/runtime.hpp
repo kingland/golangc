@@ -66,6 +66,12 @@ int64_t golangc_select(SelectCase* cases, int64_t num_cases, int64_t has_default
 /// Panic with a message and exit.
 [[noreturn]] void golangc_panic(const char* msg);
 
+/// Panic with "runtime error: integer overflow" — called by generated overflow checks.
+[[noreturn]] void golangc_panic_overflow(void);
+
+/// Panic with "runtime error: integer divide by zero" — called by generated div-zero checks.
+[[noreturn]] void golangc_panic_divzero(void);
+
 // ---- Map runtime ----
 
 struct golangc_map;
@@ -298,6 +304,8 @@ void golangc_builder_reset(golangc_builder* b);
 
 /// Return the current length of the builder content.
 int64_t golangc_builder_len(golangc_builder* b);
+/// Free a strings.Builder and its internal buffer.
+void golangc_builder_free(golangc_builder* b);
 
 // ---- errors package ----
 
@@ -322,6 +330,8 @@ void golangc_mutex_unlock(golangc_mutex* m);
 
 /// Try to lock the mutex without blocking. Returns 1 if acquired, 0 otherwise.
 int64_t golangc_mutex_try_lock(golangc_mutex* m);
+/// Free a mutex created by golangc_mutex_make.
+void golangc_mutex_free(golangc_mutex* m);
 
 struct golangc_waitgroup;
 
@@ -336,6 +346,8 @@ void golangc_waitgroup_done(golangc_waitgroup* wg);
 
 /// Block until the WaitGroup counter reaches zero.
 void golangc_waitgroup_wait(golangc_waitgroup* wg);
+/// Free a WaitGroup created by golangc_waitgroup_make.
+void golangc_waitgroup_free(golangc_waitgroup* wg);
 
 // ---- os.File handle ----
 
@@ -543,6 +555,87 @@ void golangc_bytes_string(char* sret_out, golangc_bytes_buffer* b);
 void golangc_bytes_reset(golangc_bytes_buffer* b);
 /// b.Len: return current length of buffer content.
 int64_t golangc_bytes_len(golangc_bytes_buffer* b);
+/// b.WriteRune: append a UTF-8 encoded rune to buffer.
+void golangc_bytes_write_rune(golangc_bytes_buffer* b, int64_t r);
+/// b.Bytes: return current buffer contents as a byte slice (sret 24-byte {ptr,len,cap}).
+void golangc_bytes_bytes(char* sret_out, golangc_bytes_buffer* b);
+/// b.ReadByte: read and consume one byte from the buffer. Returns -1 if empty.
+int64_t golangc_bytes_read_byte(golangc_bytes_buffer* b);
+/// b.Grow: grow the buffer's capacity by n bytes.
+void golangc_bytes_grow(golangc_bytes_buffer* b, int64_t n);
+/// b.ReadFrom: read from a strings.Reader (simplified: ptr is golangc_strings_reader*).
+int64_t golangc_bytes_read_from(golangc_bytes_buffer* b, void* reader_ptr);
+/// Free a bytes.Buffer created by golangc_bytes_new_buffer / golangc_bytes_new_buffer_string.
+void golangc_bytes_free(golangc_bytes_buffer* b);
+
+// ---- strings.Replacer ----
+struct golangc_strings_replacer;
+/// strings.NewReplacer(old, new GoString*) — single-pair replacer.
+golangc_strings_replacer* golangc_strings_new_replacer(const GoString* old_str, const GoString* new_str);
+/// r.Replace(s) → replaced string via sret.
+void golangc_strings_replacer_replace(char* sret_out, golangc_strings_replacer* r, const GoString* s);
+/// r.WriteString(w, s) — write replaced s to a bufio.Writer.
+void golangc_strings_replacer_write_string(golangc_strings_replacer* r, const GoString* s);
+/// Free a Replacer created by golangc_strings_new_replacer.
+void golangc_strings_replacer_free(golangc_strings_replacer* r);
+
+// ---- sync.Map ----
+struct golangc_sync_map;
+/// Create a new sync.Map.
+golangc_sync_map* golangc_sync_map_new(void);
+/// m.Store(key, value int64) — simplified integer key/value map.
+void golangc_sync_map_store(golangc_sync_map* m, int64_t key, int64_t val);
+/// m.Load(key int64) → value int64 (0 if not found).
+int64_t golangc_sync_map_load(golangc_sync_map* m, int64_t key);
+/// m.Delete(key int64).
+void golangc_sync_map_delete(golangc_sync_map* m, int64_t key);
+/// m.LoadOrStore(key, value int64) → existing value (or stored value) int64.
+int64_t golangc_sync_map_load_or_store(golangc_sync_map* m, int64_t key, int64_t val);
+/// m.Range(f func(key, value int64) bool) — call f for each entry; stop if f returns 0.
+void golangc_sync_map_range(golangc_sync_map* m, int64_t (*f)(int64_t key, int64_t val));
+/// Free a sync.Map and all its entries.
+void golangc_sync_map_free(golangc_sync_map* m);
+
+// ---- regexp package (38G) ----
+struct golangc_regexp;
+/// regexp.Compile: compile pattern string into a *Regexp (null on error).
+golangc_regexp* golangc_regexp_compile(const GoString* pattern);
+/// regexp.MustCompile: compile pattern, abort on error.
+golangc_regexp* golangc_regexp_must_compile(const GoString* pattern);
+/// regexp.MatchString(pattern, s) → 1 if match, 0 otherwise.
+int64_t golangc_regexp_match_string_pkg(const GoString* pattern, const GoString* s);
+/// r.MatchString(s) → 1 if match, 0 otherwise.
+int64_t golangc_regexp_match_string(golangc_regexp* r, const GoString* s);
+/// r.FindString(s) → first match via sret GoString.
+void golangc_regexp_find_string(char* sret_out, golangc_regexp* r, const GoString* s);
+/// r.FindAllString(s, n) → all matches as []string via sret slice.
+void golangc_regexp_find_all_string(char* sret_out, golangc_regexp* r, const GoString* s, int64_t n);
+/// r.FindStringSubmatch(s) → first match+subgroups as []string via sret slice.
+void golangc_regexp_find_string_submatch(char* sret_out, golangc_regexp* r, const GoString* s);
+/// r.ReplaceAllString(s, repl) → replaced string via sret GoString.
+void golangc_regexp_replace_all_string(char* sret_out, golangc_regexp* r, const GoString* s, const GoString* repl);
+/// r.ReplaceAllLiteralString(s, repl) → replaced string via sret GoString (no backreferences).
+void golangc_regexp_replace_all_literal_string(char* sret_out, golangc_regexp* r, const GoString* s, const GoString* repl);
+/// r.Split(s, n) → parts as []string via sret slice.
+void golangc_regexp_split(char* sret_out, golangc_regexp* r, const GoString* s, int64_t n);
+/// r.String() → pattern string via sret GoString.
+void golangc_regexp_string(char* sret_out, golangc_regexp* r);
+/// r.NumSubexp() → number of parenthesized subexpressions.
+int64_t golangc_regexp_num_subexp(golangc_regexp* r);
+/// r.FindStringIndex(s) → [start, end] as []int via sret slice (empty slice if no match).
+void golangc_regexp_find_string_index(char* sret_out, golangc_regexp* r, const GoString* s);
+/// r.SubexpNames() → named subexpressions as []string via sret slice.
+void golangc_regexp_subexp_names(char* sret_out, golangc_regexp* r);
+/// Free a *Regexp created by golangc_regexp_compile / golangc_regexp_must_compile.
+void golangc_regexp_free(golangc_regexp* r);
+
+// ---- strings extra functions (38F) ----
+/// strings.TrimFunc(s, f) — trims runes satisfying f from both ends.
+void golangc_strings_trim_func(char* sret_out, const GoString* s, int64_t (*f)(int64_t));
+/// strings.IndexFunc(s, f) — first index of rune satisfying f, or -1.
+int64_t golangc_strings_index_func(const GoString* s, int64_t (*f)(int64_t));
+/// strings.FieldsFunc(s, f) — split by runes satisfying f (sret slice).
+void golangc_strings_fields_func(char* sret_out, const GoString* s, int64_t (*f)(int64_t));
 
 // ---- os.File Read/Write/Seek ----
 /// f.Read: read up to len(b) bytes into b slice. Returns bytes read.
@@ -668,6 +761,8 @@ void   golangc_bufio_writer_write_string(golangc_bufio_writer* w, const GoString
 void   golangc_bufio_writer_write_byte(golangc_bufio_writer* w, int64_t c);
 void   golangc_bufio_writer_write_rune(golangc_bufio_writer* w, int64_t r);
 void   golangc_bufio_writer_flush(golangc_bufio_writer* w);
+/// Flush + free the bufio.Writer (RAII cleanup).
+void   golangc_bufio_writer_close(golangc_bufio_writer* w);
 int64_t golangc_bufio_writer_buffered(golangc_bufio_writer* w);
 
 // ---- sync.Once (38D) ----
@@ -676,6 +771,8 @@ golangc_sync_once* golangc_sync_once_new(void);
 /// o.Do(f func()) — calls f exactly once.
 /// Simplified: since codegen passes function pointer as raw ptr, we invoke it if not yet done.
 void golangc_sync_once_do(golangc_sync_once* o, void* func_ptr);
+/// Free a sync.Once created by golangc_sync_once_new.
+void golangc_sync_once_free(golangc_sync_once* o);
 
 } // extern "C"
 

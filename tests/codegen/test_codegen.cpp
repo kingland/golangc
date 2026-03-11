@@ -3906,6 +3906,32 @@ func main() {
     EXPECT_TRUE(contains(result.asm_text, "golangc_println_string"));
 }
 
+TEST(PseudoPkgTest, FmtPrintlnBool) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    b := true
+    fmt.Println(b)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_println_bool"));
+}
+
+TEST(PseudoPkgTest, FmtPrintlnBoolVarDecl) {
+    auto result = compile_to_asm(R"(
+package main
+import "fmt"
+func main() {
+    var b bool = true
+    fmt.Println(b)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_println_bool"));
+}
+
 TEST(PseudoPkgTest, FmtPrintlnNoImport) {
     // fmt is always in scope — import is optional for our pseudo-package system
     auto result = compile_to_asm(R"(
@@ -8595,4 +8621,660 @@ func main() {}
 )");
     EXPECT_FALSE(result.has_errors);
     EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_strconv_quote"));
+}
+
+// ============================================================================
+// Phase 38E: RAII auto-close for opaque handles (os.File, bufio.Writer)
+// ============================================================================
+
+TEST(Phase38ETest, OsOpenRAIIEmitsCloseOnReturn) {
+    // f, _ := os.Open("x") should auto-emit golangc_os_file_close on return
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func openFile(name string) {
+    f, _ := os.Open(name)
+    _ = f
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_close"));
+}
+
+TEST(Phase38ETest, OsOpenRAIIExternDeclared) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func openFile(name string) {
+    f, _ := os.Open(name)
+    _ = f
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_os_file_close"));
+}
+
+TEST(Phase38ETest, OsCreateRAIIEmitsCloseOnReturn) {
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func createFile(name string) {
+    f, _ := os.Create(name)
+    _ = f
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_close"));
+}
+
+TEST(Phase38ETest, BufioNewWriterRAIIEmitsCloseOnReturn) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "os"
+    "bufio"
+)
+func writeFile(name string) {
+    f, _ := os.Create(name)
+    bw := bufio.NewWriter(f)
+    _ = bw
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bufio_writer_close"));
+}
+
+TEST(Phase38ETest, BufioWriterCloseExternDeclared) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "os"
+    "bufio"
+)
+func writeFile(name string) {
+    f, _ := os.Create(name)
+    bw := bufio.NewWriter(f)
+    _ = bw
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_bufio_writer_close"));
+}
+
+TEST(Phase38ETest, ExplicitReturnAlsoEmitsRAIIClose) {
+    // Explicit return should also trigger RAII cleanup
+    auto result = compile_to_asm(R"(
+package main
+import "os"
+func openAndReturn(name string) int {
+    f, _ := os.Open(name)
+    _ = f
+    return 42
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_os_file_close"));
+}
+
+TEST(Phase38ETest, OsOpenNoCloseCallWithoutRAII) {
+    // A function that does NOT open a file should NOT call golangc_os_file_close
+    auto result = compile_to_asm(R"(
+package main
+func noFile(x int) int {
+    return x + 1
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "call golangc_os_file_close"));
+}
+
+// ============================================================================
+// Phase 38F: bytes.Buffer extras, strings.NewReplacer, sync.Map, strings.TrimFunc
+// ============================================================================
+
+TEST(Phase38FTest, BytesBufferWriteRuneCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "bytes"
+func writeRune(r rune) {
+    var b bytes.Buffer
+    b.WriteRune(r)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bytes_write_rune"));
+}
+
+TEST(Phase38FTest, BytesBufferBytesCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "bytes"
+func getBytes() {
+    var b bytes.Buffer
+    _ = b.Bytes()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bytes_bytes"));
+}
+
+TEST(Phase38FTest, BytesBufferReadByteCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "bytes"
+func readOne() int {
+    var b bytes.Buffer
+    c, _ := b.ReadByte()
+    return int(c)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bytes_read_byte"));
+}
+
+TEST(Phase38FTest, BytesBufferGrowCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "bytes"
+func growBuf(n int) {
+    var b bytes.Buffer
+    b.Grow(n)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_bytes_grow"));
+}
+
+TEST(Phase38FTest, StringsNewReplacerCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func doReplace(s string) string {
+    r := strings.NewReplacer("foo", "bar")
+    return r.Replace(s)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_new_replacer"));
+}
+
+TEST(Phase38FTest, StringsReplacerReplaceCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func doReplace(s string) string {
+    r := strings.NewReplacer("a", "b")
+    return r.Replace(s)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_replacer_replace"));
+}
+
+TEST(Phase38FTest, StringsNewReplacerExternDeclared) {
+    auto result = compile_to_asm(R"(
+package main
+import "strings"
+func doReplace(s string) string {
+    r := strings.NewReplacer("x", "y")
+    return r.Replace(s)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_strings_new_replacer"));
+}
+
+TEST(Phase38FTest, StringsTrimFuncCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "strings"
+    "unicode"
+)
+func trimIt(s string) string {
+    return strings.TrimFunc(s, unicode.IsSpace)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_trim_func"));
+}
+
+TEST(Phase38FTest, StringsIndexFuncCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import (
+    "strings"
+    "unicode"
+)
+func findDigit(s string) int {
+    return strings.IndexFunc(s, unicode.IsDigit)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_strings_index_func"));
+}
+
+TEST(Phase38FTest, SyncMapStoreAndLoadCompile) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func useMap(key int, val int) {
+    var m sync.Map
+    m.Store(key, val)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sync_map_store"));
+}
+
+TEST(Phase38FTest, SyncMapNewAutoInit) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func makeMap() {
+    var m sync.Map
+    _ = m
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sync_map_new"));
+}
+
+TEST(Phase38FTest, SyncMapDeleteCompiles) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func delKey(key int) {
+    var m sync.Map
+    m.Delete(key)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sync_map_delete"));
+}
+
+TEST(Phase38FTest, SyncMapRangeCompiles) {
+    auto result = compile_to_asm(R"(
+package main
+import "sync"
+func rangeMap(f func(k, v int) bool) {
+    var m sync.Map
+    m.Range(f)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_sync_map_range"));
+}
+
+// ============================================================================
+// Phase 38G: regexp package
+// ============================================================================
+
+TEST(Phase38GTest, RegexpMustCompileCompilesAndCallsRuntime) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func makeRe(pat string) {
+    _ = regexp.MustCompile(pat)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_must_compile"));
+}
+
+TEST(Phase38GTest, RegexpCompileReturnsTuple) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func tryCompile(pat string) {
+    r, _ := regexp.Compile(pat)
+    _ = r
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_compile"));
+}
+
+TEST(Phase38GTest, RegexpMatchStringPackageLevel) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func matchIt(pat, s string) bool {
+    ok, _ := regexp.MatchString(pat, s)
+    return ok
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_match_string_pkg"));
+}
+
+TEST(Phase38GTest, RegexpMatchStringMethod) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func matchMethod(pat, s string) bool {
+    r := regexp.MustCompile(pat)
+    return r.MatchString(s)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_match_string"));
+}
+
+TEST(Phase38GTest, RegexpFindStringMethod) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func findIt(pat, s string) string {
+    r := regexp.MustCompile(pat)
+    return r.FindString(s)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_find_string"));
+}
+
+TEST(Phase38GTest, RegexpFindAllStringMethod) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func findAll(pat, s string, n int) []string {
+    r := regexp.MustCompile(pat)
+    return r.FindAllString(s, n)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_find_all_string"));
+}
+
+TEST(Phase38GTest, RegexpReplaceAllStringMethod) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func replaceAll(pat, s, repl string) string {
+    r := regexp.MustCompile(pat)
+    return r.ReplaceAllString(s, repl)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_replace_all_string"));
+}
+
+TEST(Phase38GTest, RegexpReplaceAllLiteralStringMethod) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func replaceLiteral(pat, s, repl string) string {
+    r := regexp.MustCompile(pat)
+    return r.ReplaceAllLiteralString(s, repl)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_replace_all_literal_string"));
+}
+
+TEST(Phase38GTest, RegexpSplitMethod) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func splitIt(pat, s string, n int) []string {
+    r := regexp.MustCompile(pat)
+    return r.Split(s, n)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_split"));
+}
+
+TEST(Phase38GTest, RegexpStringMethod) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func patternOf(pat string) string {
+    r := regexp.MustCompile(pat)
+    return r.String()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_string"));
+}
+
+TEST(Phase38GTest, RegexpNumSubexpMethod) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func numGroups(pat string) int {
+    r := regexp.MustCompile(pat)
+    return r.NumSubexp()
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_num_subexp"));
+}
+
+TEST(Phase38GTest, RegexpFindStringSubmatchMethod) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func submatch(pat, s string) []string {
+    r := regexp.MustCompile(pat)
+    return r.FindStringSubmatch(s)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_find_string_submatch"));
+}
+
+TEST(Phase38GTest, RegexpFindStringIndexMethod) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func findIdx(pat, s string) []int {
+    r := regexp.MustCompile(pat)
+    return r.FindStringIndex(s)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_find_string_index"));
+}
+
+TEST(Phase38GTest, RegexpExternDeclared) {
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func useRegexp(pat string) {
+    _ = regexp.MustCompile(pat)
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_regexp_must_compile"));
+}
+
+TEST(Phase38GTest, RegexpMultipleMethodsCompile) {
+    // Ensure using multiple methods on the same *Regexp doesn't error
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func useMultiple(pat, s string) bool {
+    r := regexp.MustCompile(pat)
+    if r.MatchString(s) {
+        _ = r.FindString(s)
+        return true
+    }
+    return false
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_match_string"));
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_find_string"));
+}
+
+// ============================================================================
+// Phase 38G fix: regexp.MatchString single-value bool return
+// ============================================================================
+
+TEST(Phase38GFixTest, RegexpMatchStringPkgBool) {
+    // regexp.MatchString(pattern, s) returns (bool, error).
+    // When assigned to a single var, field 0 (bool) must be extracted.
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func check(pat, s string) bool {
+    matched, _ := regexp.MatchString(pat, s)
+    return matched
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_match_string_pkg"));
+}
+
+TEST(Phase38GFixTest, RegexpMatchStringSingleVar) {
+    // When only one LHS: matched := regexp.MatchString(...) — should extract bool.
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func checkSingle(pat, s string) bool {
+    matched, _ := regexp.MatchString(pat, s)
+    if matched {
+        return true
+    }
+    return false
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "golangc_regexp_match_string_pkg"));
+}
+
+TEST(Phase38GFixTest, RegexpMatchStringReturnBool) {
+    // The bool result from MatchString must be usable as a return value.
+    auto result = compile_to_asm(R"(
+package main
+import "regexp"
+func isMatch(pat, s string) bool {
+    ok, _ := regexp.MatchString(pat, s)
+    return ok
+}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.has_errors ? result.ir_text : result.asm_text, "; TODO:"));
+}
+
+// ============================================================================
+// Phase 38I: Integer overflow detection
+// ============================================================================
+
+TEST(OverflowCheckTest, AddEmitsJo) {
+    auto result = compile_to_asm(R"(
+package main
+func add(a int, b int) int { return a + b }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "add rax, rcx"));
+    EXPECT_TRUE(contains(result.asm_text, "jo "));
+    EXPECT_TRUE(contains(result.asm_text, "$ovf"));
+}
+
+TEST(OverflowCheckTest, SubEmitsJo) {
+    auto result = compile_to_asm(R"(
+package main
+func sub(a int, b int) int { return a - b }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "sub rax, rcx"));
+    EXPECT_TRUE(contains(result.asm_text, "jo "));
+    EXPECT_TRUE(contains(result.asm_text, "$ovf"));
+}
+
+TEST(OverflowCheckTest, MulEmitsJo) {
+    auto result = compile_to_asm(R"(
+package main
+func mul(a int, b int) int { return a * b }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "imul rax, rcx"));
+    EXPECT_TRUE(contains(result.asm_text, "jo "));
+    EXPECT_TRUE(contains(result.asm_text, "$ovf"));
+}
+
+TEST(OverflowCheckTest, DivEmitsDivzeroCheck) {
+    auto result = compile_to_asm(R"(
+package main
+func div(a int, b int) int { return a / b }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "test rcx, rcx"));
+    EXPECT_TRUE(contains(result.asm_text, "jz "));
+    EXPECT_TRUE(contains(result.asm_text, "$dvz"));
+    EXPECT_TRUE(contains(result.asm_text, "idiv rcx"));
+}
+
+TEST(OverflowCheckTest, RemEmitsDivzeroCheck) {
+    auto result = compile_to_asm(R"(
+package main
+func rem(a int, b int) int { return a % b }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "test rcx, rcx"));
+    EXPECT_TRUE(contains(result.asm_text, "jz "));
+    EXPECT_TRUE(contains(result.asm_text, "$dvz"));
+}
+
+TEST(OverflowCheckTest, NegEmitsJo) {
+    auto result = compile_to_asm(R"(
+package main
+func neg(a int) int { return -a }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "neg rax"));
+    EXPECT_TRUE(contains(result.asm_text, "jo "));
+    EXPECT_TRUE(contains(result.asm_text, "$ovf"));
+}
+
+TEST(OverflowCheckTest, OvfLabelEmitted) {
+    auto result = compile_to_asm(R"(
+package main
+func add(a int, b int) int { return a + b }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "add$ovf:"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_panic_overflow"));
+}
+
+TEST(OverflowCheckTest, DvzLabelEmitted) {
+    auto result = compile_to_asm(R"(
+package main
+func div(a int, b int) int { return a / b }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "div$dvz:"));
+    EXPECT_TRUE(contains(result.asm_text, "call golangc_panic_divzero"));
+}
+
+TEST(OverflowCheckTest, NoOvfLabelWhenNoArith) {
+    auto result = compile_to_asm(R"(
+package main
+func identity(a int) int { return a }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_FALSE(contains(result.asm_text, "identity$ovf"));
+}
+
+TEST(OverflowCheckTest, ExternPanicFunctionsEmitted) {
+    auto result = compile_to_asm(R"(
+package main
+func add(a int, b int) int { return a + b }
+func main() {}
+)");
+    EXPECT_FALSE(result.has_errors);
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_panic_overflow:PROC"));
+    EXPECT_TRUE(contains(result.asm_text, "EXTERN golangc_panic_divzero:PROC"));
 }

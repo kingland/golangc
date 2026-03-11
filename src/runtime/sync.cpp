@@ -82,4 +82,17 @@ void golangc_waitgroup_wait(golangc_waitgroup* wg) {
     WaitForSingleObject(wg->done_event, INFINITE);
 }
 
+void golangc_mutex_free(golangc_mutex* m) {
+    if (!m) return;
+    DeleteCriticalSection(&m->lock);
+    std::free(m);
+}
+
+void golangc_waitgroup_free(golangc_waitgroup* wg) {
+    if (!wg) return;
+    CloseHandle(wg->done_event);
+    DeleteCriticalSection(&wg->lock);
+    std::free(wg);
+}
+
 } // extern "C"

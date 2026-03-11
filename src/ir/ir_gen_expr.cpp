@@ -2864,7 +2864,305 @@ Value* IRGenerator::gen_builtin_call(ast::Expr* expr, const sema::ExprInfo* func
             auto* fn = get_or_declare_runtime("golangc_bytes_len", type_map_.i64_type());
             return builder_.create_call(fn, {recv}, type_map_.i64_type(), "bytes.Len");
         }
+        if (builtin_name == "bytes.Buffer.WriteRune") {
+            Value* r = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!r) return builder_.create_const_int(type_map_.i64_type(), 0, "bytes.noarg");
+            auto* fn = get_or_declare_runtime("golangc_bytes_write_rune", type_map_.void_type());
+            return builder_.create_call(fn, {recv, r}, type_map_.void_type(), "bytes.WriteRune");
+        }
+        if (builtin_name == "bytes.Buffer.Bytes") {
+            auto* fn = get_or_declare_runtime("golangc_bytes_bytes", type_map_.slice_type());
+            return builder_.create_call(fn, {recv}, type_map_.slice_type(), "bytes.Bytes");
+        }
+        if (builtin_name == "bytes.Buffer.ReadByte") {
+            // returns (byte, error) — simplified: just return the byte
+            auto* fn = get_or_declare_runtime("golangc_bytes_read_byte", type_map_.i64_type());
+            auto* b = builder_.create_call(fn, {recv}, type_map_.i64_type(), "bytes.ReadByte");
+            auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+            std::vector<IRType*> fields = {type_map_.i64_type(), type_map_.interface_type()};
+            IRType* tuple_ir = type_map_.make_tuple_type(std::move(fields));
+            auto* packed = builder_.create_const_nil(tuple_ir, "rb.pack");
+            packed = builder_.create_insert_value(packed, b, 0, "rb.pack");
+            packed = builder_.create_insert_value(packed, nil_err, 1, "rb.pack");
+            return packed;
+        }
+        if (builtin_name == "bytes.Buffer.Grow") {
+            Value* n = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!n) return builder_.create_const_int(type_map_.i64_type(), 0, "bytes.noarg");
+            auto* fn = get_or_declare_runtime("golangc_bytes_grow", type_map_.void_type());
+            return builder_.create_call(fn, {recv, n}, type_map_.void_type(), "bytes.Grow");
+        }
+        if (builtin_name == "bytes.Buffer.ReadFrom") {
+            // Simplified: call golangc_bytes_read_from(b, reader_ptr) → int64
+            Value* r = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!r) return builder_.create_const_int(type_map_.i64_type(), 0, "bytes.noarg");
+            auto* fn = get_or_declare_runtime("golangc_bytes_read_from", type_map_.i64_type());
+            auto* n = builder_.create_call(fn, {recv, r}, type_map_.i64_type(), "bytes.ReadFrom");
+            auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+            std::vector<IRType*> fields = {type_map_.i64_type(), type_map_.interface_type()};
+            IRType* tuple_ir = type_map_.make_tuple_type(std::move(fields));
+            auto* packed = builder_.create_const_nil(tuple_ir, "rf.pack");
+            packed = builder_.create_insert_value(packed, n, 0, "rf.pack");
+            packed = builder_.create_insert_value(packed, nil_err, 1, "rf.pack");
+            return packed;
+        }
         return builder_.create_const_int(type_map_.i64_type(), 0, "bytes.unknown");
+    }
+
+    // ---- strings.NewReplacer + strings.Replacer methods ----
+    if (builtin_name == "strings.NewReplacer") {
+        // Collect all string args as a flat array passed to the runtime
+        // Simplified: pass first two args (old, new) — real impl handles variadic
+        Value* first = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+        Value* second = call.args.count >= 2 ? gen_expr(call.args[1]) : nullptr;
+        if (!first) first = builder_.create_const_nil(type_map_.string_type(), "rep.nil");
+        if (!second) second = builder_.create_const_nil(type_map_.string_type(), "rep.nil");
+        // Pass old + new as two GoString* args — runtime builds a replacer with one pair
+        auto* fn = get_or_declare_runtime("golangc_strings_new_replacer", type_map_.ptr_type());
+        return builder_.create_call(fn, {first, second}, type_map_.ptr_type(), "strings.NewReplacer");
+    }
+
+    if (builtin_name.size() > 17 &&
+        builtin_name.compare(0, 17, "strings.Replacer.") == 0) {
+        Value* recv = nullptr;
+        if (call.func->kind == ast::ExprKind::Selector)
+            recv = gen_expr(call.func->selector.x);
+        if (!recv) return builder_.create_const_int(type_map_.i64_type(), 0, "rep.norecv");
+
+        if (builtin_name == "strings.Replacer.Replace") {
+            Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!s) return builder_.create_const_nil(type_map_.string_type(), "rep.noarg");
+            auto* fn = get_or_declare_runtime("golangc_strings_replacer_replace", type_map_.string_type());
+            return builder_.create_call(fn, {recv, s}, type_map_.string_type(), "strings.Replace");
+        }
+        if (builtin_name == "strings.Replacer.WriteString") {
+            Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!s) return builder_.create_const_int(type_map_.i64_type(), 0, "rep.noarg");
+            auto* fn = get_or_declare_runtime("golangc_strings_replacer_write_string", type_map_.void_type());
+            return builder_.create_call(fn, {recv, s}, type_map_.void_type(), "rep.WriteString");
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "rep.unknown");
+    }
+
+    // ---- strings.TrimFunc / IndexFunc / FieldsFunc ----
+    if (builtin_name == "strings.TrimFunc") {
+        // TrimFunc(s string, f func(rune) bool) string
+        // Simplified: pass function pointer to runtime as void*
+        Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+        Value* f = call.args.count >= 2 ? gen_expr(call.args[1]) : nullptr;
+        if (!s) return builder_.create_const_nil(type_map_.string_type(), "tf.nil");
+        if (!f) f = builder_.create_const_nil(type_map_.ptr_type(), "tf.nil");
+        auto* fn = get_or_declare_runtime("golangc_strings_trim_func", type_map_.string_type());
+        return builder_.create_call(fn, {s, f}, type_map_.string_type(), "strings.TrimFunc");
+    }
+    if (builtin_name == "strings.IndexFunc") {
+        Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+        Value* f = call.args.count >= 2 ? gen_expr(call.args[1]) : nullptr;
+        if (!s) return builder_.create_const_int(type_map_.i64_type(), -1, "if.nil");
+        if (!f) f = builder_.create_const_nil(type_map_.ptr_type(), "if.nil");
+        auto* fn = get_or_declare_runtime("golangc_strings_index_func", type_map_.i64_type());
+        return builder_.create_call(fn, {s, f}, type_map_.i64_type(), "strings.IndexFunc");
+    }
+    if (builtin_name == "strings.FieldsFunc") {
+        Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+        Value* f = call.args.count >= 2 ? gen_expr(call.args[1]) : nullptr;
+        if (!s) return builder_.create_const_nil(type_map_.slice_type(), "ff.nil");
+        if (!f) f = builder_.create_const_nil(type_map_.ptr_type(), "ff.nil");
+        auto* fn = get_or_declare_runtime("golangc_strings_fields_func", type_map_.slice_type());
+        return builder_.create_call(fn, {s, f}, type_map_.slice_type(), "strings.FieldsFunc");
+    }
+
+    // ---- sync.Map methods ----
+    if (builtin_name.size() > 9 &&
+        builtin_name.compare(0, 9, "sync.Map.") == 0) {
+        Value* recv = nullptr;
+        if (call.func->kind == ast::ExprKind::Selector)
+            recv = gen_expr(call.func->selector.x);
+        if (!recv) return builder_.create_const_int(type_map_.i64_type(), 0, "smap.norecv");
+
+        if (builtin_name == "sync.Map.Store") {
+            Value* k = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            Value* v = call.args.count >= 2 ? gen_expr(call.args[1]) : nullptr;
+            if (!k) k = builder_.create_const_int(type_map_.i64_type(), 0, "smap.nokey");
+            if (!v) v = builder_.create_const_int(type_map_.i64_type(), 0, "smap.noval");
+            auto* fn = get_or_declare_runtime("golangc_sync_map_store", type_map_.void_type());
+            return builder_.create_call(fn, {recv, k, v}, type_map_.void_type(), "smap.Store");
+        }
+        if (builtin_name == "sync.Map.Load") {
+            Value* k = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!k) k = builder_.create_const_int(type_map_.i64_type(), 0, "smap.nokey");
+            auto* fn = get_or_declare_runtime("golangc_sync_map_load", type_map_.i64_type());
+            (void)builder_.create_call(fn, {recv, k}, type_map_.i64_type(), "smap.Load");
+            // returns (interface{}, bool) — simplified: return (nil_iface, true)
+            auto* nil_val = builder_.create_const_nil(type_map_.interface_type(), "iface.nil");
+            auto* found = builder_.create_const_int(type_map_.i64_type(), 1, "smap.found");
+            std::vector<IRType*> fields = {type_map_.interface_type(), type_map_.i64_type()};
+            IRType* tuple_ir = type_map_.make_tuple_type(std::move(fields));
+            auto* packed = builder_.create_const_nil(tuple_ir, "smap.pack");
+            packed = builder_.create_insert_value(packed, nil_val, 0, "smap.pack");
+            packed = builder_.create_insert_value(packed, found, 1, "smap.pack");
+            return packed;
+        }
+        if (builtin_name == "sync.Map.Delete") {
+            Value* k = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!k) k = builder_.create_const_int(type_map_.i64_type(), 0, "smap.nokey");
+            auto* fn = get_or_declare_runtime("golangc_sync_map_delete", type_map_.void_type());
+            return builder_.create_call(fn, {recv, k}, type_map_.void_type(), "smap.Delete");
+        }
+        if (builtin_name == "sync.Map.LoadOrStore") {
+            Value* k = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            Value* v = call.args.count >= 2 ? gen_expr(call.args[1]) : nullptr;
+            if (!k) k = builder_.create_const_int(type_map_.i64_type(), 0, "smap.nokey");
+            if (!v) v = builder_.create_const_int(type_map_.i64_type(), 0, "smap.noval");
+            auto* fn = get_or_declare_runtime("golangc_sync_map_load_or_store", type_map_.i64_type());
+            (void)builder_.create_call(fn, {recv, k, v}, type_map_.i64_type(), "smap.LOS");
+            auto* nil_val = builder_.create_const_nil(type_map_.interface_type(), "iface.nil");
+            auto* loaded = builder_.create_const_int(type_map_.i64_type(), 0, "smap.loaded");
+            std::vector<IRType*> fields = {type_map_.interface_type(), type_map_.i64_type()};
+            IRType* tuple_ir = type_map_.make_tuple_type(std::move(fields));
+            auto* packed = builder_.create_const_nil(tuple_ir, "smap.pack");
+            packed = builder_.create_insert_value(packed, nil_val, 0, "smap.pack");
+            packed = builder_.create_insert_value(packed, loaded, 1, "smap.pack");
+            return packed;
+        }
+        if (builtin_name == "sync.Map.Range") {
+            Value* f = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!f) return builder_.create_const_int(type_map_.i64_type(), 0, "smap.noarg");
+            auto* fn = get_or_declare_runtime("golangc_sync_map_range", type_map_.void_type());
+            return builder_.create_call(fn, {recv, f}, type_map_.void_type(), "smap.Range");
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "smap.unknown");
+    }
+
+    // ---- regexp package ----
+    // regexp.Compile(expr) → (*Regexp, error)
+    if (builtin_name == "regexp.Compile") {
+        Value* expr_val = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+        if (!expr_val) expr_val = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+        auto* fn = get_or_declare_runtime("golangc_regexp_compile", type_map_.ptr_type());
+        auto* re = builder_.create_call(fn, {expr_val}, type_map_.ptr_type(), "re.compile");
+        auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+        std::vector<IRType*> fields = {type_map_.ptr_type(), type_map_.interface_type()};
+        IRType* tuple_ir = type_map_.make_tuple_type(std::move(fields));
+        auto* packed = builder_.create_const_nil(tuple_ir, "re.pack");
+        packed = builder_.create_insert_value(packed, re, 0, "re.pack");
+        packed = builder_.create_insert_value(packed, nil_err, 1, "re.pack");
+        return packed;
+    }
+    // regexp.MustCompile(expr) → *Regexp  (panics on error — simplified: same as Compile)
+    if (builtin_name == "regexp.MustCompile") {
+        Value* expr_val = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+        if (!expr_val) expr_val = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+        auto* fn = get_or_declare_runtime("golangc_regexp_must_compile", type_map_.ptr_type());
+        return builder_.create_call(fn, {expr_val}, type_map_.ptr_type(), "re.must_compile");
+    }
+    // regexp.MatchString(pattern, s) → (bool, error)
+    if (builtin_name == "regexp.MatchString") {
+        Value* pat = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+        Value* s   = call.args.count >= 2 ? gen_expr(call.args[1]) : nullptr;
+        if (!pat) pat = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+        if (!s)   s   = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+        auto* fn = get_or_declare_runtime("golangc_regexp_match_string_pkg", type_map_.i64_type());
+        auto* matched_i64 = builder_.create_call(fn, {pat, s}, type_map_.i64_type(), "re.match64");
+        // Truncate i64 → i1 so fmt.Println dispatches to golangc_println_bool (prints "true"/"false")
+        auto* matched = builder_.create_trunc(matched_i64, type_map_.i1_type(), "re.match");
+        auto* nil_err = builder_.create_const_nil(type_map_.interface_type(), "nil.err");
+        std::vector<IRType*> fields = {type_map_.i1_type(), type_map_.interface_type()};
+        IRType* tuple_ir = type_map_.make_tuple_type(std::move(fields));
+        auto* packed = builder_.create_const_nil(tuple_ir, "re.pack");
+        packed = builder_.create_insert_value(packed, matched, 0, "re.pack");
+        packed = builder_.create_insert_value(packed, nil_err, 1, "re.pack");
+        return packed;
+    }
+    // regexp.Regexp method calls: "regexp.Regexp." prefix = 14 chars
+    if (builtin_name.size() > 14 &&
+        builtin_name.compare(0, 14, "regexp.Regexp.") == 0) {
+        Value* recv = nullptr;
+        if (call.func->kind == ast::ExprKind::Selector)
+            recv = gen_expr(call.func->selector.x);
+        if (!recv) return builder_.create_const_int(type_map_.i64_type(), 0, "re.norecv");
+
+        // r.MatchString(s) → bool (i1)
+        if (builtin_name == "regexp.Regexp.MatchString") {
+            Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!s) s = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+            auto* fn = get_or_declare_runtime("golangc_regexp_match_string", type_map_.i64_type());
+            auto* r64 = builder_.create_call(fn, {recv, s}, type_map_.i64_type(), "re.MatchString64");
+            return builder_.create_trunc(r64, type_map_.i1_type(), "re.MatchString");
+        }
+        // r.FindString(s) → string (sret)
+        if (builtin_name == "regexp.Regexp.FindString") {
+            Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!s) s = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+            auto* fn = get_or_declare_runtime("golangc_regexp_find_string", type_map_.string_type());
+            return builder_.create_call(fn, {recv, s}, type_map_.string_type(), "re.FindString");
+        }
+        // r.FindAllString(s, n) → []string (slice sret)
+        if (builtin_name == "regexp.Regexp.FindAllString") {
+            Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            Value* n = call.args.count >= 2 ? gen_expr(call.args[1]) : nullptr;
+            if (!s) s = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+            if (!n) n = builder_.create_const_int(type_map_.i64_type(), -1, "re.n");
+            auto* fn = get_or_declare_runtime("golangc_regexp_find_all_string", type_map_.slice_type());
+            return builder_.create_call(fn, {recv, s, n}, type_map_.slice_type(), "re.FindAllString");
+        }
+        // r.FindStringSubmatch(s) → []string (slice sret)
+        if (builtin_name == "regexp.Regexp.FindStringSubmatch") {
+            Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!s) s = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+            auto* fn = get_or_declare_runtime("golangc_regexp_find_string_submatch", type_map_.slice_type());
+            return builder_.create_call(fn, {recv, s}, type_map_.slice_type(), "re.FindStringSubmatch");
+        }
+        // r.ReplaceAllString(s, repl) → string (sret)
+        if (builtin_name == "regexp.Regexp.ReplaceAllString") {
+            Value* s    = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            Value* repl = call.args.count >= 2 ? gen_expr(call.args[1]) : nullptr;
+            if (!s)    s    = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+            if (!repl) repl = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+            auto* fn = get_or_declare_runtime("golangc_regexp_replace_all_string", type_map_.string_type());
+            return builder_.create_call(fn, {recv, s, repl}, type_map_.string_type(), "re.ReplaceAllString");
+        }
+        // r.ReplaceAllLiteralString(s, repl) → string (sret)
+        if (builtin_name == "regexp.Regexp.ReplaceAllLiteralString") {
+            Value* s    = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            Value* repl = call.args.count >= 2 ? gen_expr(call.args[1]) : nullptr;
+            if (!s)    s    = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+            if (!repl) repl = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+            auto* fn = get_or_declare_runtime("golangc_regexp_replace_all_literal_string", type_map_.string_type());
+            return builder_.create_call(fn, {recv, s, repl}, type_map_.string_type(), "re.ReplaceAllLiteralString");
+        }
+        // r.Split(s, n) → []string
+        if (builtin_name == "regexp.Regexp.Split") {
+            Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            Value* n = call.args.count >= 2 ? gen_expr(call.args[1]) : nullptr;
+            if (!s) s = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+            if (!n) n = builder_.create_const_int(type_map_.i64_type(), -1, "re.n");
+            auto* fn = get_or_declare_runtime("golangc_regexp_split", type_map_.slice_type());
+            return builder_.create_call(fn, {recv, s, n}, type_map_.slice_type(), "re.Split");
+        }
+        // r.String() → string (the pattern)
+        if (builtin_name == "regexp.Regexp.String") {
+            auto* fn = get_or_declare_runtime("golangc_regexp_string", type_map_.string_type());
+            return builder_.create_call(fn, {recv}, type_map_.string_type(), "re.String");
+        }
+        // r.NumSubexp() → int
+        if (builtin_name == "regexp.Regexp.NumSubexp") {
+            auto* fn = get_or_declare_runtime("golangc_regexp_num_subexp", type_map_.i64_type());
+            return builder_.create_call(fn, {recv}, type_map_.i64_type(), "re.NumSubexp");
+        }
+        // r.FindStringIndex(s) → []int
+        if (builtin_name == "regexp.Regexp.FindStringIndex") {
+            Value* s = call.args.count >= 1 ? gen_expr(call.args[0]) : nullptr;
+            if (!s) s = builder_.create_const_nil(type_map_.string_type(), "re.nil");
+            auto* fn = get_or_declare_runtime("golangc_regexp_find_string_index", type_map_.slice_type());
+            return builder_.create_call(fn, {recv, s}, type_map_.slice_type(), "re.FindStringIndex");
+        }
+        // r.SubexpNames() → []string
+        if (builtin_name == "regexp.Regexp.SubexpNames") {
+            auto* fn = get_or_declare_runtime("golangc_regexp_subexp_names", type_map_.slice_type());
+            return builder_.create_call(fn, {recv}, type_map_.slice_type(), "re.SubexpNames");
+        }
+        return builder_.create_const_int(type_map_.i64_type(), 0, "re.unknown");
     }
 
     // ---- math package ----

@@ -1,9 +1,63 @@
 #include "ir/ir_gen.hpp"
 
 #include <cassert>
+#include <string>
 
 namespace golangc {
 namespace ir {
+
+// Returns true if the named builtin call returns an RC-tracked sret string
+// (allocated via rc_alloc_string) that the caller must golangc_release().
+static bool is_rc_sret_string_call(const std::string& sym) {
+    // These runtime functions return sret GoString whose ptr is rc_alloc_string'd:
+    static const char* const k_rc_sret[] = {
+        "fmt.Sprintf", "fmt.Sprint",
+        "strings.ToUpper", "strings.ToLower", "strings.TrimSpace",
+        "strings.Repeat", "strings.Trim", "strings.TrimLeft", "strings.TrimRight",
+        "strings.Replace", "strings.TrimPrefix", "strings.TrimSuffix",
+        "strings.Join", "strings.Map", "strings.Title",
+        "strings.TrimFunc",
+        "strings.Cut",         // returns 3-tuple but first two strings are RC
+        "strings.Replacer.Replace",
+        "strconv.Itoa", "strconv.FormatInt", "strconv.FormatFloat",
+        "strconv.FormatBool", "strconv.FormatUint",
+        "strconv.Quote",
+        "bytes.Buffer.String",
+        nullptr
+    };
+    for (const char* const* p = k_rc_sret; *p; ++p) {
+        if (sym == *p) return true;
+    }
+    return false;
+}
+
+// Returns the RAII cleanup function name if the given RHS expression is a
+// call to a known opaque-handle-producing builtin, or "" otherwise.
+static std::string raii_cleanup_for_rhs(ast::Expr* rhs_expr,
+                                        const sema::ExprInfo* callee_info) {
+    if (!rhs_expr || rhs_expr->kind != ast::ExprKind::Call) return "";
+    if (!callee_info || !callee_info->symbol) return "";
+    const std::string sym(callee_info->symbol->name);
+    // os/bufio file handles
+    if (sym == "os.Open" || sym == "os.Create" || sym == "os.OpenFile")
+        return "golangc_os_file_close";
+    if (sym == "bufio.NewWriter")
+        return "golangc_bufio_writer_close";
+    // strings/bytes opaque handles
+    if (sym == "strings.NewReplacer")
+        return "golangc_strings_replacer_free";
+    if (sym == "bytes.NewBuffer" || sym == "bytes.NewBufferString")
+        return "golangc_bytes_free";
+    // sync opaque handles
+    if (sym == "sync.NewMutex" || sym == "sync.Mutex")
+        return "golangc_mutex_free";
+    if (sym == "sync.NewWaitGroup" || sym == "sync.WaitGroup")
+        return "golangc_waitgroup_free";
+    // regexp handles
+    if (sym == "regexp.Compile" || sym == "regexp.MustCompile")
+        return "golangc_regexp_free";
+    return "";
+}
 
 void IRGenerator::gen_stmt(ast::Stmt* stmt) {
     if (!stmt) return;
@@ -165,8 +219,17 @@ void IRGenerator::gen_assign(ast::AssignStmt& stmt) {
 
         auto* lhs_addr = gen_addr(lhs_expr);
         if (lhs_addr) {
-            // Release old RC value if this alloca is tracked
             auto* lhs_alloca = dynamic_cast<Instruction*>(lhs_addr);
+            // Cleanup old RAII handle if this alloca is tracked
+            if (lhs_alloca && raii_vars_.count(lhs_alloca)) {
+                auto& cleanup_fn = raii_vars_[lhs_alloca];
+                auto* old_val = builder_.create_load(
+                    lhs_alloca, type_map_.ptr_type(), "raii.old");
+                auto* fn = get_or_declare_runtime(cleanup_fn, type_map_.void_type());
+                builder_.create_call(fn, {old_val}, type_map_.void_type(), "raii.cleanup.old");
+                raii_vars_.erase(lhs_alloca);
+            }
+            // Release old RC value if this alloca is tracked
             if (lhs_alloca && rc_vars_.count(lhs_alloca)) {
                 auto* old_val = builder_.create_load(
                     lhs_alloca, type_map_.ptr_type(), "rc.old");
@@ -268,6 +331,13 @@ void IRGenerator::gen_short_var_decl(ast::ShortVarDeclStmt& stmt) {
 
     // Special case: multi-return function call  a, b := f()
     if (stmt.lhs.count > 1 && stmt.rhs.count == 1) {
+        // Detect RAII handle from the callee before generating the RHS value
+        const sema::ExprInfo* callee_info = nullptr;
+        if (stmt.rhs[0]->kind == ast::ExprKind::Call) {
+            callee_info = expr_info(stmt.rhs[0]->call.func);
+        }
+        std::string raii_cleanup = raii_cleanup_for_rhs(stmt.rhs[0], callee_info);
+
         auto* rhs_val = gen_expr(stmt.rhs[0]);
         if (rhs_val && rhs_val->type && rhs_val->type->is_struct() &&
             rhs_val->type->fields.size() == stmt.lhs.count) {
@@ -284,6 +354,11 @@ void IRGenerator::gen_short_var_decl(ast::ShortVarDeclStmt& stmt) {
                     field_type, std::string(stmt.lhs[i]->ident.name) + ".addr");
                 builder_.create_store(extracted, alloca);
                 var_map_[info->symbol] = alloca;
+
+                // Register RAII handle for index 0 (the handle, not the error)
+                if (i == 0 && !raii_cleanup.empty()) {
+                    raii_vars_[alloca] = raii_cleanup;
+                }
             }
             return;
         }
@@ -301,6 +376,14 @@ void IRGenerator::gen_short_var_decl(ast::ShortVarDeclStmt& stmt) {
         if (!info || !info->symbol) continue;
 
         IRType* var_type = map_sema_type(info->symbol->type);
+
+        // If RHS is a multi-return tuple but LHS expects a scalar, extract field 0.
+        // e.g. matched := regexp.MatchString(...) where the call returns (bool, error).
+        if (rhs && rhs->type && rhs->type->is_struct() && !var_type->is_struct()) {
+            rhs = builder_.create_extract_value(
+                rhs, 0, rhs->type->fields.empty() ? var_type : rhs->type->fields[0],
+                std::string(ident.name) + ".v0");
+        }
 
         // Box the rhs if assigning to interface variable
         auto* sym_under = sema::underlying(info->symbol->type);
@@ -326,11 +409,51 @@ void IRGenerator::gen_short_var_decl(ast::ShortVarDeclStmt& stmt) {
         if (rhs_inst && is_rc_producing(rhs_inst->opcode)) {
             rc_vars_[alloca] = rhs_inst->opcode;
         }
+
+        // Register sret-RC-string calls for scope-exit release
+        // (these return ptr via rc_alloc_string, not via RC opcode)
+        if (stmt.rhs[i]->kind == ast::ExprKind::Call) {
+            auto* callee_info_s = expr_info(stmt.rhs[i]->call.func);
+            if (callee_info_s && callee_info_s->symbol) {
+                const std::string sym(callee_info_s->symbol->name);
+                // Only track if result is a string type (ptr slot in var_type)
+                auto* sema_t = info->symbol->type;
+                auto* under = sema_t ? sema::underlying(sema_t) : nullptr;
+                bool is_string_var = under &&
+                    under->kind == sema::TypeKind::Basic &&
+                    under->basic == sema::BasicKind::String;
+                if (is_string_var && is_rc_sret_string_call(sym)) {
+                    rc_vars_[alloca] = Opcode::Call;  // sentinel: sret RC string
+                }
+            }
+        }
+
+        // Register RAII handle allocas for scope-exit cleanup
+        if (stmt.rhs[i]->kind == ast::ExprKind::Call) {
+            auto* callee_info_s = expr_info(stmt.rhs[i]->call.func);
+            auto cleanup = raii_cleanup_for_rhs(stmt.rhs[i], callee_info_s);
+            if (!cleanup.empty()) {
+                raii_vars_[alloca] = cleanup;
+            }
+        }
     }
 }
 
 void IRGenerator::gen_return(ast::ReturnStmt& stmt) {
+    // Helper lambda: emit RAII cleanup calls for all tracked opaque handles.
+    // Must be called before RC releases (handles may use RC-allocated memory).
+    auto emit_raii = [&]() {
+        for (auto& [alloca_ptr, cleanup_fn] : raii_vars_) {
+            auto* loaded = builder_.create_load(
+                alloca_ptr, type_map_.ptr_type(), "raii.load");
+            auto* fn = get_or_declare_runtime(cleanup_fn, type_map_.void_type());
+            builder_.create_call(fn, {loaded}, type_map_.void_type(), "raii.cleanup");
+        }
+        raii_vars_.clear();
+    };
+
     if (stmt.results.count == 0) {
+        emit_raii();
         // Release all RC locals before returning
         for (auto& [alloca_ptr, origin_op] : rc_vars_) {
             auto* loaded = builder_.create_load(
@@ -344,6 +467,15 @@ void IRGenerator::gen_return(ast::ReturnStmt& stmt) {
 
     if (stmt.results.count == 1) {
         auto* val = gen_expr(stmt.results[0]);
+        // Suppress RAII cleanup for the returned handle (caller takes ownership)
+        if (val) {
+            auto* load_inst = dynamic_cast<const Instruction*>(val);
+            if (load_inst && load_inst->opcode == Opcode::Load
+                && !load_inst->operands.empty()) {
+                raii_vars_.erase(load_inst->operands[0]);
+            }
+        }
+        emit_raii();
         // Suppress scope-exit release for the returned RC value
         // (caller takes ownership — no Release should happen on function exit)
         auto* load_inst = dynamic_cast<const Instruction*>(val);
@@ -368,6 +500,7 @@ void IRGenerator::gen_return(ast::ReturnStmt& stmt) {
     if (!tuple_type || !tuple_type->is_struct()) {
         // Fallback: just return the first value
         auto* val = gen_expr(stmt.results[0]);
+        emit_raii();
         // Release all RC locals before fallback return
         for (auto& [alloca_ptr, origin_op] : rc_vars_) {
             auto* loaded = builder_.create_load(
@@ -379,6 +512,7 @@ void IRGenerator::gen_return(ast::ReturnStmt& stmt) {
         return;
     }
 
+    emit_raii();
     // Release all RC locals before multi-return
     for (auto& [alloca_ptr, origin_op] : rc_vars_) {
         auto* loaded = builder_.create_load(
@@ -1173,8 +1307,10 @@ void IRGenerator::gen_local_var_spec(ast::VarSpec& spec) {
                     else if (type_name == "sync.Mutex")      make_fn = "golangc_mutex_make";
                     else if (type_name == "sync.WaitGroup")  make_fn = "golangc_waitgroup_make";
                     else if (type_name == "bytes.Buffer")    make_fn = "golangc_bytes_new_buffer";
-                    else if (type_name == "bufio.Writer")    make_fn = "golangc_bufio_writer_new";
-                    else if (type_name == "sync.Once")       make_fn = "golangc_sync_once_new";
+                    else if (type_name == "bufio.Writer")      make_fn = "golangc_bufio_writer_new";
+                    else if (type_name == "sync.Once")         make_fn = "golangc_sync_once_new";
+                    else if (type_name == "sync.Map")          make_fn = "golangc_sync_map_new";
+                    else if (type_name == "strings.Replacer")  make_fn = nullptr; // created via strings.NewReplacer()
                     if (make_fn) {
                         auto* fn = get_or_declare_runtime(make_fn, type_map_.ptr_type());
                         auto* ptr = builder_.create_call(fn, {}, type_map_.ptr_type(),

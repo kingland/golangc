@@ -5,6 +5,9 @@
 #include <cstdio>
 #include <cstring>
 
+// RC allocator from rc.cpp
+extern void* rc_alloc_string(size_t bytes);
+
 extern "C" {
 
 double golangc_parse_float(const GoString* s) {
@@ -17,13 +20,11 @@ double golangc_parse_float(const GoString* s) {
 }
 
 void golangc_format_float(char* sret_out, double value) {
-    char* s = static_cast<char*>(malloc(64));
-    if (!s) {
-        *reinterpret_cast<char**>(sret_out) = nullptr;
-        *reinterpret_cast<int64_t*>(sret_out + 8) = 0;
-        return;
-    }
-    int len = snprintf(s, 64, "%g", value);
+    char tmp[64];
+    int len = snprintf(tmp, sizeof(tmp), "%g", value);
+    if (len < 0) len = 0;
+    char* s = static_cast<char*>(rc_alloc_string(static_cast<size_t>(len) + 1));
+    if (s) memcpy(s, tmp, static_cast<size_t>(len) + 1);
     *reinterpret_cast<char**>(sret_out) = s;
     *reinterpret_cast<int64_t*>(sret_out + 8) = static_cast<int64_t>(len);
 }
@@ -41,7 +42,7 @@ int64_t golangc_parse_bool(const GoString* s) {
 void golangc_format_bool(char* sret_out, int64_t value) {
     const char* s = value ? "true" : "false";
     int64_t len = value ? 4 : 5;
-    char* buf = static_cast<char*>(malloc(static_cast<size_t>(len) + 1));
+    char* buf = static_cast<char*>(rc_alloc_string(static_cast<size_t>(len) + 1));
     if (buf) memcpy(buf, s, static_cast<size_t>(len) + 1);
     *reinterpret_cast<char**>(sret_out) = buf;
     *reinterpret_cast<int64_t*>(sret_out + 8) = len;

@@ -282,6 +282,43 @@ enum class BuiltinId : int {
     OsFileInfoName,         // fi.Name() string
     OsFileInfoSize,         // fi.Size() int64
     OsFileInfoIsDir,        // fi.IsDir() bool
+    // bytes.Buffer extras (38F)
+    BytesBufferWriteRune,    // b.WriteRune(r rune) (int, error)
+    BytesBufferBytes,        // b.Bytes() []byte
+    BytesBufferReadByte,     // b.ReadByte() (byte, error)
+    BytesBufferGrow,         // b.Grow(n int)
+    BytesBufferReadFrom,     // b.ReadFrom(r io.Reader) (int64, error)
+    // strings.Replacer (38F)
+    StringsNewReplacer,      // strings.NewReplacer(oldnew ...string) *strings.Replacer
+    StringsReplacerReplace,  // r.Replace(s string) string
+    StringsReplacerWriteString, // r.WriteString(w io.Writer, s string) (int, error)
+    // strings extras (38F)
+    StringsTrimFunc,         // strings.TrimFunc(s string, f func(rune) bool) string
+    StringsIndexFunc,        // strings.IndexFunc(s string, f func(rune) bool) int
+    StringsFieldsFunc,       // strings.FieldsFunc(s string, f func(rune) bool) []string
+    // sync.Map (38F)
+    SyncMapStore,            // m.Store(key, value interface{})
+    SyncMapLoad,             // m.Load(key interface{}) (value interface{}, ok bool)
+    SyncMapDelete,           // m.Delete(key interface{})
+    SyncMapLoadOrStore,      // m.LoadOrStore(key, value interface{}) (actual interface{}, loaded bool)
+    SyncMapRange,            // m.Range(f func(key, value interface{}) bool)
+    // regexp package (38G)
+    RegexpCompile,           // regexp.Compile(expr string) (*regexp.Regexp, error)
+    RegexpMustCompile,       // regexp.MustCompile(expr string) *regexp.Regexp
+    RegexpMatchString,       // regexp.MatchString(pattern, s string) (bool, error)
+    // regexp.Regexp methods
+    RegexpMatchStringMethod, // r.MatchString(s string) bool
+    RegexpFindString,        // r.FindString(s string) string
+    RegexpFindAllString,     // r.FindAllString(s string, n int) []string
+    RegexpFindStringSubmatch,// r.FindStringSubmatch(s string) []string
+    RegexpReplaceAllString,  // r.ReplaceAllString(s, repl string) string
+    RegexpReplaceAllLiteralString, // r.ReplaceAllLiteralString(s, repl string) string
+    RegexpSplit,             // r.Split(s string, n int) []string
+    RegexpString,            // r.String() string  (returns pattern)
+    RegexpNumSubexp,         // r.NumSubexp() int
+    RegexpFindStringIndex,   // r.FindStringIndex(s string) []int
+    RegexpFindAllStringIndex,// r.FindAllStringIndex(s string, n int) [][]int
+    RegexpSubexpNames,       // r.SubexpNames() []string
     // Sentinel
     Count
 };
@@ -339,6 +376,18 @@ enum class BuiltinId : int {
 /// Get the sync.Once opaque pointer type (*sync.Once).
 /// Returns nullptr until init_universe() has been called.
 [[nodiscard]] Type* sync_once_ptr_type();
+
+/// Get the strings.Replacer opaque pointer type (*strings.Replacer).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* strings_replacer_ptr_type();
+
+/// Get the sync.Map opaque pointer type (*sync.Map).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* sync_map_ptr_type();
+
+/// Get the regexp.Regexp opaque pointer type (*regexp.Regexp).
+/// Returns nullptr until init_universe() has been called.
+[[nodiscard]] Type* regexp_regexp_ptr_type();
 
 } // namespace sema
 } // namespace golangc

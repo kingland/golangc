@@ -43,6 +43,12 @@ private:
     // Consumed by gen_func_decl to emit scope-exit Release calls.
     std::unordered_map<Value*, Opcode> rc_vars_;
 
+    // RAII tracking: alloca Value* → cleanup function name.
+    // Populated when a short-var-decl RHS is an opaque handle producer
+    // (os.Open, os.Create, bufio.NewWriter, etc.).
+    // On scope exit (return or fall-through), the cleanup fn is called.
+    std::unordered_map<Value*, std::string> raii_vars_;
+
     /// Returns true if the opcode produces a heap-RC-tracked object.
     static bool is_rc_producing(Opcode op) {
         switch (op) {

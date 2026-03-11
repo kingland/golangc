@@ -164,6 +164,8 @@ void X64CodeGenerator::emit_module_header(const ir::Module& module) {
         "golangc_retain",
         "golangc_release",
         "golangc_rc_slice_alloc",
+        "golangc_panic_overflow",
+        "golangc_panic_divzero",
     };
 
     // Track which EXTERNs we've already emitted (avoid duplicates).
@@ -247,6 +249,8 @@ void X64CodeGenerator::emit_function(const ir::Function& func) {
     current_func_ = &func;
     has_sret_ = false;
     sret_slot_ = 0;
+    ovf_needed_ = false;
+    dvz_needed_ = false;
 
     // Detect sret: function returns a large struct (>8 bytes)
     if (func.return_type && is_large_struct(func.return_type)) {
@@ -271,6 +275,9 @@ void X64CodeGenerator::emit_function(const ir::Function& func) {
     for (size_t i = 0; i < func.blocks.size(); ++i) {
         emit_block(*func.blocks[i], func);
     }
+
+    // Emit overflow/divzero panic trampolines if any checks were emitted
+    emit_overflow_labels(func);
 
     out_ += fmt::format("{} ENDP\n", name);
     out_ += "_TEXT ENDS\n";
@@ -342,6 +349,20 @@ void X64CodeGenerator::emit_epilogue() {
     emit(fmt::format("add rsp, {}", fsize));
     emit("pop rbp");
     emit("ret");
+}
+
+void X64CodeGenerator::emit_overflow_labels(const ir::Function& func) {
+    auto name = masm_name(func.name);
+    if (ovf_needed_) {
+        out_ += fmt::format("{}$ovf:\n", name);
+        emit(fmt::format("sub rsp, {}", kShadowSpace));
+        emit("call golangc_panic_overflow");
+    }
+    if (dvz_needed_) {
+        out_ += fmt::format("{}$dvz:\n", name);
+        emit(fmt::format("sub rsp, {}", kShadowSpace));
+        emit("call golangc_panic_divzero");
+    }
 }
 
 void X64CodeGenerator::scan_allocas(const ir::Function& func) {
